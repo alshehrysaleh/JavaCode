@@ -5,7 +5,8 @@ const DEFAULTS = () => ({
   plans: [],      // {id, name, muscles[], exercises:[{exId, sets, reps}], createdAt, updatedAt}
   sessions: [],   // {id, planId, name, muscles[], date, durationSec, entries:[{exId, sets:[{w, r, done}]}]}
   schedule: [],   // {date:'YYYY-MM-DD', planId}
-  settings: { unit: 'kg', rest: 90, gif: true, defaultSets: 3, defaultReps: 10, view: 'grid' },
+  favorites: [],  // معرّفات التمارين المفضلة
+  settings: { unit: 'kg', rest: 90, gif: true, defaultSets: 3, defaultReps: 10, view: 'grid', showAdvanced: false },
 });
 
 let state = load();
@@ -50,6 +51,13 @@ export const db = {
       .filter((x) => x.hit > 0)
       .sort((a, b) => b.hit - a.hit || (b.p.updatedAt || 0) - (a.p.updatedAt || 0))
       .map((x) => x.p);
+  },
+
+  isFav(id) { return state.favorites.includes(id); },
+  toggleFav(id) {
+    state.favorites = state.favorites.includes(id) ? state.favorites.filter((x) => x !== id) : [...state.favorites, id];
+    save();
+    return state.favorites.includes(id);
   },
 
   addSession(s) { state.sessions.push(s); save(); },

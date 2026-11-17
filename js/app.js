@@ -143,7 +143,7 @@ function viewTrain(musclesStr) {
   if (!muscles.length) return go('#/home');
   muscles.forEach((m) => home.selected.add(m));
   const plans = db.plansForMuscles(muscles);
-  const suggestions = forMuscles(muscles).slice(0, 8);
+  const suggestions = applyPrefs(forMuscles(muscles)).items.slice(0, 8);
   const sugSection = h('section', { class: 'sug' });
 
   put($view(), 
@@ -188,6 +188,40 @@ function exNames(e, { tag = 'div', num = null } = {}) {
     e.ar ? h('div', { class: 'ar' }, e.ar) : null);
 }
 
+/* ===== تفضيلات العرض: المفضلة أولًا، الأجهزة فقط، إخفاء التمارين المتقدمة ===== */
+const ADVANCED_CATS = new Set(['stretching', 'olympic weightlifting', 'strongman']);
+const GYM_EQUIP = new Set(['machine', 'cable']);
+
+/** يطبّق التفضيلات على قائمة تمارين ويعيد عدد المخفي */
+function applyPrefs(items, f = {}) {
+  if (f.machines) items = items.filter((e) => GYM_EQUIP.has(e.equipment));
+  if (f.fav) items = items.filter((e) => db.isFav(e.id));
+  let hidden = 0;
+  if (!db.settings.showAdvanced && !f.q && !f.fav) {
+    const n = items.length;
+    items = items.filter((e) => !ADVANCED_CATS.has(e.category));
+    hidden = n - items.length;
+  }
+  // المفضلة أولًا مع الحفاظ على الترتيب
+  items = [...items.filter((e) => db.isFav(e.id)), ...items.filter((e) => !db.isFav(e.id))];
+  return { items, hidden };
+}
+
+function findExercises(f) {
+  const base = f.muscle && !f.q && !f.equipment ? forMuscles([f.muscle]) : search(f.q, f);
+  return applyPrefs(base, f);
+}
+
+/** سطر العدد + تنبيه التمارين المخفية مع زر إظهارها */
+function resultsLine(total, hidden, extra, onChange) {
+  return h('div', { class: 'results-line' },
+    h('p', { class: 'muted small' }, fmtNum(total), ' تمرين', extra || ''),
+    hidden ? h('button', { class: 'link-btn', onclick: () => { db.setSetting('showAdvanced', true); onChange(); } },
+      '+ ', fmtNum(hidden), ' إطالة/أولمبي مخفية — إظهار') : null,
+    !hidden && db.settings.showAdvanced ? h('button', { class: 'link-btn', onclick: () => { db.setSetting('showAdvanced', false); onChange(); } },
+      'إخفاء الإطالات والأولمبي') : null);
+}
+
 /* ===== طرق العرض: شبكة صور / بطاقات كبيرة / قائمة ===== */
 const VIEWS = [
   ['grid', 'شبكة', 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z'],
@@ -223,6 +257,15 @@ function exItem(e, mode, { chosen, onToggle, onOpen }) {
   const mark = selectable ? h('span', { class: 'pick-mark', 'aria-hidden': 'true' }, icon('check')) : null;
   const info = h('button', { class: 'info-btn', 'aria-label': 'عرض الحركة والتفاصيل',
     onclick: (ev) => { ev.stopPropagation(); showExercise(e, selectable ? { chosen, onToggle: () => { toggle(); } } : {}); } }, 'i');
+  const star = h('button', { class: 'star-btn' + (db.isFav(e.id) ? ' on' : ''), 'aria-label': 'المفضلة',
+    'aria-pressed': String(db.isFav(e.id)),
+    onclick: (ev) => {
+      ev.stopPropagation();
+      const on = db.toggleFav(e.id);
+      star.classList.toggle('on', on);
+      star.setAttribute('aria-pressed', String(on));
+      toast(on ? '★ أُضيف إلى المفضلة' : 'أُزيل من المفضلة');
+    } }, '★');
   const tags = h('div', { class: 'tags' },
     e.primary.map((m) => h('span', { class: 'tag m' }, mAr(m))),
     h('span', { class: 'tag' }, eqAr(e.equipment)));
@@ -231,7 +274,7 @@ function exItem(e, mode, { chosen, onToggle, onOpen }) {
     'aria-pressed': selectable ? String(isOn()) : null,
     onclick: () => (selectable ? toggle() : onOpen ? onOpen(e) : showExercise(e)),
     onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); el.click(); } } },
-    h('div', { class: 'ex-media' }, media, mark, info),
+    h('div', { class: 'ex-media' }, media, mark, info, star),
     h('div', { class: 'ex-info' }, exNames(e), mode !== 'grid' ? tags : null));
   function toggle() {
     chosen.has(e.id) ? chosen.delete(e.id) : chosen.add(e.id);
@@ -356,20 +399,17 @@ function openPicker() {
   const d = draft;
   if (!d) return;
   const chosen = new Set(d.exercises.map((x) => x.exId));
-  const filters = { q: '', muscle: d.muscles[0] || '', equipment: '' };
+  const filters = { q: '', muscle: d.muscles[0] || '', equipment: '', machines: false, fav: false };
   const listEl = h('div', { class: 'list' });
   const count = h('b', {}, fmtNum(chosen.size));
   const updCount = () => { count.textContent = fmtNum(chosen.size); };
 
   const renderList = () => {
-    let items = filters.q || filters.equipment || !filters.muscle
-      ? search(filters.q, filters)
-      : forMuscles([filters.muscle]);
-    const total = items.length;
-    items = items.slice(0, 80);
-    put(listEl, 
-      h('p', { class: 'muted small' }, fmtNum(total), ' تمرين · اضغط الصورة للاختيار، وزر (i) لمشاهدة الحركة'),
-      exCollection(items, { chosen, onToggle: updCount }));
+    const { items: all, hidden } = findExercises(filters);
+    const items = all.slice(0, 80);
+    put(listEl,
+      resultsLine(all.length, hidden, ' · اضغط الصورة للاختيار، وزر (i) لمشاهدة الحركة', renderList),
+      items.length ? exCollection(items, { chosen, onToggle: updCount }) : emptyResults(filters));
   };
 
   const content = h('div', {},
@@ -398,11 +438,25 @@ function libraryFilters(filters, onChange, preferMuscles = [], trailing = null) 
     h('div', { class: 'chips scroll' },
       h('button', { class: 'chip' + (!filters.muscle ? ' on' : ''), onclick: pick('') }, 'الكل'),
       muscleOrder.map((m) => h('button', { class: 'chip' + (filters.muscle === m ? ' on' : ''), 'data-m': m, onclick: pick(m) }, mAr(m)))),
+    h('div', { class: 'chips toggles' },
+      toggleChip('★ المفضلة', 'fav'),
+      toggleChip('الأجهزة والكيبل فقط', 'machines')),
     h('div', { class: 'filter-row' },
       h('select', { class: 'select', 'aria-label': 'الأداة', onchange: (e) => { filters.equipment = e.target.value; onChange(); } },
         h('option', { value: '' }, 'كل الأدوات'),
         Object.entries(EQUIPMENT_AR).map(([k, v]) => h('option', { value: k, selected: filters.equipment === k }, v))),
       trailing));
+
+  function toggleChip(label, key) {
+    const b = h('button', { class: 'chip tgl' + (filters[key] ? ' on' : ''), 'aria-pressed': String(!!filters[key]),
+      onclick: () => {
+        filters[key] = !filters[key];
+        b.classList.toggle('on', filters[key]);
+        b.setAttribute('aria-pressed', String(filters[key]));
+        onChange();
+      } }, label);
+    return b;
+  }
 
   function pick(m) {
     return (e) => {
@@ -414,17 +468,17 @@ function libraryFilters(filters, onChange, preferMuscles = [], trailing = null) 
 }
 
 /* ============ تبويب التمارين (المستودع) ============ */
-const lib = { q: '', muscle: '', equipment: '' };
+const lib = { q: '', muscle: '', equipment: '', machines: false, fav: false };
 
 function viewLibrary(params) {
   if (params.get('m')) lib.muscle = params.get('m');
   const listEl = h('div', { class: 'list' });
   const renderList = () => {
-    const items = lib.muscle && !lib.q && !lib.equipment ? forMuscles([lib.muscle]) : search(lib.q, lib);
+    const { items, hidden } = findExercises(lib);
     const shown = items.slice(0, 100);
     put(listEl,
-      h('p', { class: 'muted small' }, fmtNum(items.length), ' تمرين', items.length > 100 ? ' — يُعرض أول ١٠٠' : ''),
-      exCollection(shown, { onOpen: (e) => go('#/ex/' + e.id) }));
+      resultsLine(items.length, hidden, items.length > 100 ? ' — يُعرض أول ١٠٠' : '', renderList),
+      shown.length ? exCollection(shown, { onOpen: (e) => go('#/ex/' + e.id) }) : emptyResults(lib));
   };
   put($view(), 
     header('مستودع التمارين', { back: false }),
@@ -442,8 +496,25 @@ function exerciseDetail(e) {
       h('span', { class: 'tag' }, eqAr(e.equipment)),
       e.level && h('span', { class: 'tag' }, LEVEL_AR[e.level] || e.level),
       e.category && h('span', { class: 'tag' }, CATEGORY_AR[e.category] || e.category)),
+    favButton(e),
     h('h3', { class: 'sec' }, 'طريقة الأداء'),
     h('ol', { class: 'steps', dir: 'ltr' }, e.instructions.map((s) => h('li', {}, s))));
+}
+
+function favButton(e) {
+  const label = () => (db.isFav(e.id) ? '★ في المفضلة (اضغط للإزالة)' : '☆ أضف إلى المفضلة');
+  const b = h('button', { class: 'btn sm fav-btn' + (db.isFav(e.id) ? ' on' : ''), onclick: () => {
+    const on = db.toggleFav(e.id);
+    b.classList.toggle('on', on);
+    b.textContent = label();
+  } }, label());
+  return b;
+}
+
+function emptyResults(f) {
+  return h('div', { class: 'empty' },
+    h('h2', {}, f.fav ? 'لا توجد تمارين مفضلة هنا بعد' : 'لا توجد نتائج'),
+    h('p', {}, f.fav ? 'اضغط النجمة ★ على صورة أي تمرين ليظهر هنا وفي أعلى القوائم دائمًا.' : 'جرّب إزالة بعض الفلاتر أو تغيير كلمة البحث.'));
 }
 
 function showExercise(e, { chosen = null, onToggle } = {}) {
@@ -755,6 +826,9 @@ function viewSettings() {
       h('div', { class: 'card settings' },
         h('div', { class: 'set-row' }, h('span', {}, 'وحدة الوزن'), seg('unit', [['kg', 'كجم'], ['lb', 'رطل']])),
         h('div', { class: 'set-row' }, h('span', {}, 'مدة الراحة بين الجولات (ثانية)'), num('rest', 15, 600, 15)),
+        h('div', { class: 'set-row' }, h('div', {}, h('span', {}, 'إظهار الإطالات والتمارين الأولمبية'),
+          h('p', { class: 'muted small' }, 'مخفية افتراضيًا لتقليل الخيارات؛ تظهر دائمًا عند البحث بالاسم.')),
+          seg('showAdvanced', [[true, 'إظهار'], [false, 'إخفاء']])),
         h('div', { class: 'set-row' }, h('span', {}, 'طريقة عرض التمارين'), seg('view', [['grid', 'شبكة'], ['cards', 'بطاقات'], ['list', 'قائمة']])),
         h('div', { class: 'set-row' }, h('span', {}, 'الجولات الافتراضية'), num('defaultSets', 1, 10, 1)),
         h('div', { class: 'set-row' }, h('span', {}, 'التكرارات الافتراضية'), num('defaultReps', 1, 50, 1)),

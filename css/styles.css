@@ -410,3 +410,20 @@ h1, h2, h3, p { margin: 0; }
 .filter-row { display: flex; gap: 8px; align-items: center; }
 .filter-row .select { flex: 1; min-width: 0; }
 @media (max-width: 400px) { .filter-row .view-switch span { display: none; } .filter-row .view-switch button { padding: 6px 12px; } }
+
+/* ===== المفضلة والفلاتر السريعة ===== */
+.star-btn {
+  position: absolute; bottom: 8px; inset-inline-end: 8px; width: 34px; height: 34px; border-radius: 50%; border: 0;
+  background: rgba(255,255,255,.92); color: #9aa0bf; font-size: 19px; line-height: 1; display: grid; place-items: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,.18);
+}
+.star-btn.on { color: #f5a623; }
+.ex-list .star-btn { width: 26px; height: 26px; font-size: 15px; top: 6px; bottom: auto; inset-inline-end: 6px; }
+.chips.toggles { gap: 8px; }
+.chip.tgl { border-style: dashed; }
+.chip.tgl.on { border-style: solid; }
+.results-line { display: flex; align-items: center; justify-content: space-between; gap: 6px 10px; flex-wrap: wrap; }
+.results-line p { flex: 1; min-width: 180px; }
+.link-btn { border: 0; background: var(--brand-soft); color: var(--brand); border-radius: 999px; padding: 4px 12px; font-size: 13px; font-weight: 600; min-height: 32px; }
+.fav-btn { align-self: flex-start; border: 1px solid var(--line); }
+.fav-btn.on { color: #b77800; border-color: #f5a623; background: #fff7e6; }
