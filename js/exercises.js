@@ -66,46 +66,91 @@ export function search(q, { muscle = '', equipment = '' } = {}) {
     (!t || e.name.toLowerCase().includes(t)));
 }
 
+/* ===== الصور المضمّنة في التطبيق (data/img) =====
+ * thumbs/<العضلة>.json : صورة مصغرة لكل تمرين
+ * full/<رقم>.json      : صورتا الحركة بحجم أكبر
+ * تُحمَّل من نفس موقع التطبيق فتعمل في أي استضافة ودون إنترنت بعد أول فتح. */
+const chunkCache = new Map();
+function loadChunk(path) {
+  if (!chunkCache.has(path)) {
+    chunkCache.set(path, fetch(path).then((r) => (r.ok ? r.json() : {})).catch(() => {
+      chunkCache.delete(path);
+      return {};
+    }));
+  }
+  return chunkCache.get(path);
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(str) {
+  let c = 0xffffffff;
+  for (const b of new TextEncoder().encode(str)) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+const FULL_CHUNKS = 64;
+
+async function thumbSrc(e) {
+  const m = await loadChunk(`data/img/thumbs/${(e.primary[0] || 'other').replace(/ /g, '_')}.json`);
+  return m[e.id] || imgUrl(e, 0);
+}
+async function frameSrcs(e) {
+  const m = await loadChunk(`data/img/full/${crc32(e.id) % FULL_CHUNKS}.json`);
+  return m[e.id] || Array.from({ length: e.images }, (_, i) => imgUrl(e, i));
+}
+
 /**
- * عنصر وسائط متحرك: يحاول GIF أولًا (إن فُعّل)، وإلا يبدّل بين صورتي الحركة (بداية/نهاية)
- * ليظهر كأنه GIF.
+ * عنصر وسائط متحرك: يبدّل بين صورتي الحركة (بداية/نهاية) فيظهر كأنه GIF،
+ * وإن فُعّل خيار GIF ووُجد GIF متاح يُعرض بدلًا منهما.
  */
 export function mediaEl(e, { small = false } = {}) {
   const wrap = document.createElement('div');
-  wrap.className = 'media' + (small ? ' small' : '');
+  wrap.className = 'media loading' + (small ? ' small' : '');
   const img = document.createElement('img');
   img.alt = e.name;
-  img.loading = 'lazy';
   img.decoding = 'async';
-  img.src = imgUrl(e, 0);
-  img.onerror = () => wrap.classList.add('noimg');
+  img.onload = () => wrap.classList.remove('loading');
+  img.onerror = () => { wrap.classList.remove('loading'); wrap.classList.add('noimg'); };
   wrap.appendChild(img);
 
-  let frame = 0;
-  let timer = null;
-  const startFrames = () => {
-    if (small || e.images < 2 || timer) return;
-    const next = new Image();
-    next.src = imgUrl(e, 1);
-    timer = setInterval(() => {
-      if (!wrap.isConnected) { clearInterval(timer); return; }
-      frame = 1 - frame;
-      img.src = imgUrl(e, frame);
-    }, 900);
-  };
+  if (small) {
+    thumbSrc(e).then((src) => { img.src = src; });
+    return wrap;
+  }
 
-  if (!small && db.settings.gif) {
+  let timer = null;
+  frameSrcs(e).then((frames) => {
+    if (!frames.length) { wrap.classList.add('noimg'); return; }
+    let frame = 0;
+    img.src = frames[0];
+    if (frames.length > 1) {
+      timer = setInterval(() => {
+        if (!wrap.isConnected && wrap.dataset.started) { clearInterval(timer); return; }
+        if (wrap.isConnected) wrap.dataset.started = '1';
+        frame = (frame + 1) % frames.length;
+        img.src = frames[frame];
+      }, 900);
+    }
+  });
+
+  if (db.settings.gif) {
     findGif(e).then((g) => {
-      if (g && wrap.isConnected) {
+      if (!g) return;
+      const gif = new Image();
+      gif.onload = () => {
+        clearInterval(timer);
         img.src = g.url;
-        img.onerror = () => { img.onerror = null; startFrames(); };
         const cap = document.createElement('div');
         cap.className = 'media-cap';
         cap.textContent = `GIF: ${g.name}`;
         wrap.appendChild(cap);
-      } else startFrames();
+      };
+      gif.src = g.url;
     });
-  } else startFrames();
+  }
   return wrap;
 }
 
