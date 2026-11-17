@@ -1,7 +1,7 @@
 """Pack exercise images into same-origin JSON chunks (data URIs) so the app
 works where external images are blocked and offline.
 Usage: python3 scripts/build-images.py <raw_images_dir> data/exercises.json data/img
-  thumbs/<muscle>.json : {id: dataURI}            (frame 0, small)
+  thumbs/<muscle>.json : {id: dataURI}            (frame 0, 300px — used by grid/cards/list views)
   full/<n>.json        : {id: [dataURI, dataURI]} (both frames, ~16 exercises per file)
 """
 import base64, io, json, os, sys, zlib
@@ -29,7 +29,7 @@ for e in exs:
     if not frames:
         continue
     key = (e["primary"] or ["other"])[0]
-    thumbs.setdefault(key, {})[e["id"]] = enc(frames[0], 160, 60)
+    thumbs.setdefault(key, {})[e["id"]] = enc(frames[0], 300, 58)
     full.setdefault(chunk_of(e["id"]), {})[e["id"]] = [enc(f, 400, 62) for f in frames]
 
 for sub, data in (("thumbs", thumbs), ("full", full)):

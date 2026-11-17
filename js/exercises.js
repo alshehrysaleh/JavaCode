@@ -58,12 +58,15 @@ function rank(e) {
   return cat * 10 + eq * 3 + lvl;
 }
 
+// توحيد الحروف العربية لتسهيل البحث (أ إ آ ← ا، ة ← ه، ى ← ي)
+const norm = (x = '') => x.toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/[\u064B-\u0652]/g, '');
+
 export function search(q, { muscle = '', equipment = '' } = {}) {
   const t = q.trim().toLowerCase();
   return all.filter((e) =>
     (!muscle || e.primary.includes(muscle)) &&
     (!equipment || e.equipment === equipment) &&
-    (!t || e.name.toLowerCase().includes(t)));
+    (!t || e.name.toLowerCase().includes(t) || norm(e.ar).includes(norm(t))));
 }
 
 /* ===== الصور المضمّنة في التطبيق (data/img) =====

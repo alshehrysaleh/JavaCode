@@ -5,7 +5,7 @@ const DEFAULTS = () => ({
   plans: [],      // {id, name, muscles[], exercises:[{exId, sets, reps}], createdAt, updatedAt}
   sessions: [],   // {id, planId, name, muscles[], date, durationSec, entries:[{exId, sets:[{w, r, done}]}]}
   schedule: [],   // {date:'YYYY-MM-DD', planId}
-  settings: { unit: 'kg', rest: 90, gif: true, defaultSets: 3, defaultReps: 10 },
+  settings: { unit: 'kg', rest: 90, gif: true, defaultSets: 3, defaultReps: 10, view: 'grid' },
 });
 
 let state = load();

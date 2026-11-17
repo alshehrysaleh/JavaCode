@@ -144,6 +144,7 @@ function viewTrain(musclesStr) {
   muscles.forEach((m) => home.selected.add(m));
   const plans = db.plansForMuscles(muscles);
   const suggestions = forMuscles(muscles).slice(0, 8);
+  const sugSection = h('section', { class: 'sug' });
 
   put($view(), 
     header(muscles.map(mAr).join(' + ')),
@@ -158,11 +159,16 @@ function viewTrain(musclesStr) {
             h('h2', {}, 'لا يوجد تمرين محفوظ لهذه العضلات بعد'),
             h('p', {}, 'خطّط تمرينك الآن: اختر التمارين من المستودع وحدد عدد الجولات والتكرارات، وستجدها هنا في المرة القادمة.'),
             h('button', { class: 'btn primary block', onclick: () => newPlan(muscles) }, icon('plus'), 'خطّط تمرينًا لهذه العضلات')),
-      h('section', {},
-        h('div', { class: 'sec-row' },
-          h('h2', { class: 'sec' }, 'تمارين مقترحة'),
-          h('a', { href: '#/library?m=' + muscles[0], class: 'link' }, 'كل التمارين')),
-        h('div', { class: 'list' }, suggestions.map((e) => exRow(e, { onclick: () => go('#/ex/' + e.id) }))))));
+      sugSection));
+  function drawSug() {
+    put(sugSection,
+      h('div', { class: 'sec-row' },
+        h('h2', { class: 'sec' }, 'تمارين مقترحة'),
+        h('a', { href: '#/library?m=' + muscles[0], class: 'link' }, 'كل التمارين')),
+      viewSwitch(drawSug),
+      exCollection(suggestions, { onOpen: (e) => go('#/ex/' + e.id) }));
+  }
+  drawSug();
 }
 
 function planCard(p) {
@@ -175,15 +181,65 @@ function planCard(p) {
       h('button', { class: 'btn primary sm', onclick: () => startSession(p.id), disabled: !p.exercises.length }, icon('play'), 'ابدأ')));
 }
 
-function exRow(e, { onclick, right } = {}) {
-  return h('div', { class: 'ex-row', onclick },
-    mediaEl(e, { small: true }),
-    h('div', { class: 'ex-info' },
-      h('div', { class: 'ex-name', dir: 'ltr' }, e.name),
-      h('div', { class: 'tags' },
-        e.primary.map((m) => h('span', { class: 'tag m' }, mAr(m))),
-        h('span', { class: 'tag' }, eqAr(e.equipment)))),
-    right || null);
+/** اسم التمرين: الإنجليزي أولًا ثم الترجمة العربية */
+function exNames(e, { tag = 'div', num = null } = {}) {
+  return h(tag, { class: 'names' },
+    h('div', { class: 'en', dir: 'ltr' }, num != null ? fmtNum(num) + '. ' : '', e.name),
+    e.ar ? h('div', { class: 'ar' }, e.ar) : null);
+}
+
+/* ===== طرق العرض: شبكة صور / بطاقات كبيرة / قائمة ===== */
+const VIEWS = [
+  ['grid', 'شبكة', 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z'],
+  ['cards', 'بطاقات', 'M4 4h16v11H4zM4 18h16'],
+  ['list', 'قائمة', 'M4 5h4v4H4zM11 7h9M4 15h4v4H4zM11 17h9'],
+];
+
+function viewSwitch(onChange) {
+  const wrap = h('div', { class: 'view-switch', role: 'group', 'aria-label': 'طريقة العرض' });
+  const draw = () => put(wrap, VIEWS.map(([id, label, d]) => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'ic');
+    svg.innerHTML = `<path d="${d}"/>`;
+    return h('button', { class: db.settings.view === id ? 'on' : '', 'aria-label': label, title: label,
+      onclick: () => { db.setSetting('view', id); draw(); onChange(); } }, svg, h('span', {}, label));
+  }));
+  draw();
+  return wrap;
+}
+
+/**
+ * يعرض مجموعة تمارين بالطريقة المختارة.
+ * selectable: النقر على الصورة يختار التمرين، وزر (i) يعرض الحركة والتفاصيل.
+ */
+function exCollection(items, { chosen = null, onToggle, onOpen } = {}) {
+  const mode = db.settings.view || 'grid';
+  return h('div', { class: 'ex-col ex-' + mode }, items.map((e) => exItem(e, mode, { chosen, onToggle, onOpen })));
+}
+
+function exItem(e, mode, { chosen, onToggle, onOpen }) {
+  const selectable = !!chosen;
+  const isOn = () => selectable && chosen.has(e.id);
+  const mark = selectable ? h('span', { class: 'pick-mark', 'aria-hidden': 'true' }, icon('check')) : null;
+  const info = h('button', { class: 'info-btn', 'aria-label': 'عرض الحركة والتفاصيل',
+    onclick: (ev) => { ev.stopPropagation(); showExercise(e, selectable ? { chosen, onToggle: () => { toggle(); } } : {}); } }, 'i');
+  const tags = h('div', { class: 'tags' },
+    e.primary.map((m) => h('span', { class: 'tag m' }, mAr(m))),
+    h('span', { class: 'tag' }, eqAr(e.equipment)));
+  const media = mediaEl(e, { small: true });
+  const el = h('div', { class: 'ex-item' + (isOn() ? ' on' : ''), role: 'button', tabindex: '0',
+    'aria-pressed': selectable ? String(isOn()) : null,
+    onclick: () => (selectable ? toggle() : onOpen ? onOpen(e) : showExercise(e)),
+    onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); el.click(); } } },
+    h('div', { class: 'ex-media' }, media, mark, info),
+    h('div', { class: 'ex-info' }, exNames(e), mode !== 'grid' ? tags : null));
+  function toggle() {
+    chosen.has(e.id) ? chosen.delete(e.id) : chosen.add(e.id);
+    el.classList.toggle('on', chosen.has(e.id));
+    el.setAttribute('aria-pressed', String(chosen.has(e.id)));
+    onToggle && onToggle(e);
+  }
+  return el;
 }
 
 /* ============ قائمة الخطط ============ */
@@ -233,7 +289,8 @@ function viewPlan(id) {
         return h('div', { class: 'card pe' },
           h('div', { class: 'pe-top' },
             h('span', { class: 'num' }, fmtNum(i + 1)),
-            h('div', { class: 'ex-name', dir: 'ltr', onclick: () => showExercise(e) }, e.name),
+            h('button', { class: 'pe-thumb', 'aria-label': 'عرض الحركة', onclick: () => showExercise(e) }, mediaEl(e, { small: true })),
+            h('div', { class: 'pe-name', onclick: () => showExercise(e) }, exNames(e)),
             h('div', { class: 'pe-ctl' },
               h('button', { class: 'icon-btn sm', disabled: i === 0, onclick: () => { move(i, -1); } }, icon('up')),
               h('button', { class: 'icon-btn sm', disabled: i === d.exercises.length - 1, onclick: () => { move(i, 1); } }, icon('down')),
@@ -302,6 +359,7 @@ function openPicker() {
   const filters = { q: '', muscle: d.muscles[0] || '', equipment: '' };
   const listEl = h('div', { class: 'list' });
   const count = h('b', {}, fmtNum(chosen.size));
+  const updCount = () => { count.textContent = fmtNum(chosen.size); };
 
   const renderList = () => {
     let items = filters.q || filters.equipment || !filters.muscle
@@ -310,21 +368,12 @@ function openPicker() {
     const total = items.length;
     items = items.slice(0, 80);
     put(listEl, 
-      h('p', { class: 'muted small' }, fmtNum(total), ' تمرين', total > 80 ? ' (اعرض أقل بالبحث أو الفلترة)' : ''),
-      items.map((e) => {
-        const box = h('button', { class: 'check' + (chosen.has(e.id) ? ' on' : ''), 'aria-label': 'اختيار' }, icon('check'));
-        const row = exRow(e, { right: box, onclick: (ev) => {
-          if (ev.target.closest('.ex-name')) { showExercise(e); return; }
-          chosen.has(e.id) ? chosen.delete(e.id) : chosen.add(e.id);
-          box.classList.toggle('on', chosen.has(e.id));
-          count.textContent = fmtNum(chosen.size);
-        } });
-        return row;
-      }));
+      h('p', { class: 'muted small' }, fmtNum(total), ' تمرين · اضغط الصورة للاختيار، وزر (i) لمشاهدة الحركة'),
+      exCollection(items, { chosen, onToggle: updCount }));
   };
 
   const content = h('div', {},
-    libraryFilters(filters, renderList, d.muscles),
+    libraryFilters(filters, renderList, d.muscles, viewSwitch(() => renderList())),
     listEl,
     h('div', { class: 'sheet-foot' },
       h('button', { class: 'btn primary block', onclick: () => close() }, 'إضافة المختار (', count, ')')));
@@ -339,19 +388,21 @@ function openPicker() {
   renderList();
 }
 
-function libraryFilters(filters, onChange, preferMuscles = []) {
+function libraryFilters(filters, onChange, preferMuscles = [], trailing = null) {
   const muscleOrder = [...new Set([...preferMuscles, ...Object.keys(MUSCLE_AR)])];
   let t;
   return h('div', { class: 'filters' },
     h('label', { class: 'search' }, icon('search'),
-      h('input', { type: 'search', placeholder: 'ابحث باسم التمرين (بالإنجليزية)', value: filters.q,
+      h('input', { type: 'search', placeholder: 'ابحث باسم التمرين (عربي أو إنجليزي)', value: filters.q,
         oninput: (e) => { filters.q = e.target.value; clearTimeout(t); t = setTimeout(onChange, 200); } })),
     h('div', { class: 'chips scroll' },
       h('button', { class: 'chip' + (!filters.muscle ? ' on' : ''), onclick: pick('') }, 'الكل'),
       muscleOrder.map((m) => h('button', { class: 'chip' + (filters.muscle === m ? ' on' : ''), 'data-m': m, onclick: pick(m) }, mAr(m)))),
-    h('select', { class: 'select', onchange: (e) => { filters.equipment = e.target.value; onChange(); } },
-      h('option', { value: '' }, 'كل الأدوات'),
-      Object.entries(EQUIPMENT_AR).map(([k, v]) => h('option', { value: k, selected: filters.equipment === k }, v))));
+    h('div', { class: 'filter-row' },
+      h('select', { class: 'select', 'aria-label': 'الأداة', onchange: (e) => { filters.equipment = e.target.value; onChange(); } },
+        h('option', { value: '' }, 'كل الأدوات'),
+        Object.entries(EQUIPMENT_AR).map(([k, v]) => h('option', { value: k, selected: filters.equipment === k }, v))),
+      trailing));
 
   function pick(m) {
     return (e) => {
@@ -371,20 +422,20 @@ function viewLibrary(params) {
   const renderList = () => {
     const items = lib.muscle && !lib.q && !lib.equipment ? forMuscles([lib.muscle]) : search(lib.q, lib);
     const shown = items.slice(0, 100);
-    put(listEl, 
+    put(listEl,
       h('p', { class: 'muted small' }, fmtNum(items.length), ' تمرين', items.length > 100 ? ' — يُعرض أول ١٠٠' : ''),
-      shown.map((e) => exRow(e, { onclick: () => go('#/ex/' + e.id) })));
+      exCollection(shown, { onOpen: (e) => go('#/ex/' + e.id) }));
   };
   put($view(), 
     header('مستودع التمارين', { back: false }),
-    h('main', { class: 'page' }, libraryFilters(lib, renderList), listEl));
+    h('main', { class: 'page' }, libraryFilters(lib, renderList, [], viewSwitch(() => renderList())), listEl));
   renderList();
 }
 
 function exerciseDetail(e) {
   return h('div', { class: 'ex-detail' },
     mediaEl(e),
-    h('h2', { class: 'ex-title', dir: 'ltr' }, e.name),
+    h('div', { class: 'ex-title' }, exNames(e)),
     h('div', { class: 'tags' },
       e.primary.map((m) => h('span', { class: 'tag m' }, mAr(m))),
       e.secondary.map((m) => h('span', { class: 'tag m2' }, mAr(m))),
@@ -395,7 +446,17 @@ function exerciseDetail(e) {
     h('ol', { class: 'steps', dir: 'ltr' }, e.instructions.map((s) => h('li', {}, s))));
 }
 
-function showExercise(e) { openSheet(exerciseDetail(e), { title: 'تفاصيل التمرين' }); }
+function showExercise(e, { chosen = null, onToggle } = {}) {
+  let close;
+  const content = h('div', {}, exerciseDetail(e));
+  if (chosen) {
+    const on = chosen.has(e.id);
+    content.append(h('div', { class: 'sheet-foot' },
+      h('button', { class: 'btn block ' + (on ? 'outline' : 'primary'), onclick: () => { onToggle(); close(); } },
+        on ? 'إزالة من الاختيار' : 'اختر هذا التمرين', on ? null : icon('check'))));
+  }
+  close = openSheet(content, { title: 'تفاصيل التمرين' });
+}
 
 function viewExercise(id) {
   const e = ex(id);
@@ -518,7 +579,7 @@ function viewSession() {
       return h('div', { class: 'card sx' },
         h('div', { class: 'sx-head', onclick: () => showExercise(e) },
           mediaEl(e, { small: true }),
-          h('div', {}, h('div', { class: 'ex-name', dir: 'ltr' }, fmtNum(ei + 1), '. ', e.name),
+          h('div', {}, exNames(e, { num: ei + 1 }),
             h('div', { class: 'muted small' }, e.primary.map(mAr).join('، '), ' · اضغط لعرض الحركة'))),
         rows);
     }),
@@ -669,7 +730,7 @@ function sessionCard(s) {
       const e = ex(en.exId);
       const done = en.sets.filter((x) => x.done);
       return h('div', { class: 'sess-ex' },
-        h('div', { class: 'ex-name', dir: 'ltr' }, e ? e.name : en.exId),
+        e ? exNames(e) : h('div', { class: 'en', dir: 'ltr' }, en.exId),
         h('div', { class: 'muted small' }, done.length ? done.map((x) => `${fmtNum(x.w)}×${fmtNum(x.r)}`).join('  ·  ') : 'لم يُنجز'));
     }),
     h('button', { class: 'btn ghost danger sm', onclick: () => { if (confirm('حذف هذا السجل؟')) { db.deleteSession(s.id); viewCalendar(); } } }, icon('trash'), 'حذف السجل'));
@@ -694,6 +755,7 @@ function viewSettings() {
       h('div', { class: 'card settings' },
         h('div', { class: 'set-row' }, h('span', {}, 'وحدة الوزن'), seg('unit', [['kg', 'كجم'], ['lb', 'رطل']])),
         h('div', { class: 'set-row' }, h('span', {}, 'مدة الراحة بين الجولات (ثانية)'), num('rest', 15, 600, 15)),
+        h('div', { class: 'set-row' }, h('span', {}, 'طريقة عرض التمارين'), seg('view', [['grid', 'شبكة'], ['cards', 'بطاقات'], ['list', 'قائمة']])),
         h('div', { class: 'set-row' }, h('span', {}, 'الجولات الافتراضية'), num('defaultSets', 1, 10, 1)),
         h('div', { class: 'set-row' }, h('span', {}, 'التكرارات الافتراضية'), num('defaultReps', 1, 50, 1)),
         h('div', { class: 'set-row' }, h('div', {}, h('span', {}, 'صور GIF متحركة من الإنترنت'),
