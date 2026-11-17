@@ -1,5 +1,5 @@
 // عامل الخدمة: يجعل التطبيق يعمل دون اتصال داخل النادي
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL = `shell-${VERSION}`;
 const MEDIA = 'media-v1';
 const ASSETS = [

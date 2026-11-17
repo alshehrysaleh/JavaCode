@@ -6,6 +6,7 @@ const DEFAULTS = () => ({
   sessions: [],   // {id, planId, name, muscles[], date, durationSec, entries:[{exId, sets:[{w, r, done}]}]}
   schedule: [],   // {date:'YYYY-MM-DD', planId}
   favorites: [],  // معرّفات التمارين المفضلة
+  weekly: [],     // برنامج أسبوعي ثابت: {dow: 0..6 (الأحد=0), planId, from:'YYYY-MM-DD'}
   settings: { unit: 'kg', rest: 90, gif: true, defaultSets: 3, defaultReps: 10, view: 'grid', showAdvanced: false },
 });
 
@@ -42,6 +43,7 @@ export const db = {
   deletePlan(id) {
     state.plans = state.plans.filter((p) => p.id !== id);
     state.schedule = state.schedule.filter((s) => s.planId !== id);
+    state.weekly = state.weekly.filter((s) => s.planId !== id);
     save();
   },
   plansForMuscles(muscles) {
@@ -82,6 +84,26 @@ export const db = {
     save();
   },
   scheduledOn(dateKey) { return state.schedule.filter((s) => s.date === dateKey); },
+
+  /* البرنامج الأسبوعي المتكرر */
+  addWeekly(dow, planId, from) {
+    if (!state.weekly.some((w) => w.dow === dow && w.planId === planId)) {
+      state.weekly.push({ dow, planId, from });
+      save();
+    }
+  },
+  removeWeekly(dow, planId) {
+    state.weekly = state.weekly.filter((w) => !(w.dow === dow && w.planId === planId));
+    save();
+  },
+  /** كل الخطط المجدولة في تاريخ: الخاصة باليوم + المتكررة أسبوعيًا (من تاريخ إضافتها) */
+  scheduledFor(dateKey) {
+    const dow = new Date(dateKey + 'T12:00:00').getDay();
+    const out = state.schedule.filter((s) => s.date === dateKey).map((s) => ({ planId: s.planId, recurring: false }));
+    state.weekly.filter((w) => w.dow === dow && w.from <= dateKey && !out.some((o) => o.planId === w.planId))
+      .forEach((w) => out.push({ planId: w.planId, recurring: true }));
+    return out.filter((o) => state.plans.some((p) => p.id === o.planId));
+  },
 
   exportJSON() { return JSON.stringify(state, null, 2); },
   importJSON(text) {

@@ -699,19 +699,20 @@ function rangeText(fmt, a, b) {
 function viewCalendar() {
   const byDay = {};
   db.state.sessions.forEach((s) => { (byDay[sessionDay(s)] ||= []).push(s); });
-  const sched = {};
-  db.state.schedule.forEach((s) => { (sched[s.date] ||= []).push(s); });
   const today = dateKey();
   const days = Array.from({ length: 7 }, (_, i) => addDays(cal.week, i));
   const keys = days.map((d) => dateKey(d));
   const weekSessions = keys.flatMap((k) => byDay[k] || []);
   const isThisWeek = keys.includes(today);
+  const doneOn = (k, planId) => (byDay[k] || []).some((s) => s.planId === planId);
 
   const strip = h('div', { class: 'week-strip' },
     days.map((d, i) => {
       const k = keys[i];
+      const planned = db.scheduledFor(k);
+      const pending = planned.some((p) => !doneOn(k, p.planId));
       return h('button', {
-        class: ['wday', k === today && 'today', k === cal.sel && 'sel', byDay[k] && 'has', sched[k] && 'plan'].filter(Boolean).join(' '),
+        class: ['wday', k === today && 'today', k === cal.sel && 'sel', byDay[k] && 'has', pending && 'plan'].filter(Boolean).join(' '),
         onclick: () => { cal.sel = k; viewCalendar(); },
       },
         h('span', { class: 'wd-name' }, fmtG({ weekday: 'short' }).format(d)),
@@ -729,13 +730,35 @@ function viewCalendar() {
     if (Math.abs(dx) > 50) shift(dx > 0 ? 1 : -1); // في RTL السحب لليمين = الأسبوع التالي
   });
 
+  // برنامج الأسبوع: كل يوم وخططه
+  const program = h('div', { class: 'card program' },
+    h('div', { class: 'sec-row' },
+      h('h2', { class: 'sec' }, 'برنامج الأسبوع'),
+      h('button', { class: 'btn outline sm', onclick: () => openWeekPlanner(cal.week, viewCalendar) }, icon('plus'), 'توزيع التمارين')),
+    days.map((d, i) => {
+      const k = keys[i];
+      const planned = db.scheduledFor(k);
+      return h('div', { class: 'prog-row' + (k === cal.sel ? ' sel' : '') + (k === today ? ' today' : ''),
+        onclick: () => { cal.sel = k; viewCalendar(); } },
+        h('div', { class: 'prog-day' }, h('b', {}, fmtG({ weekday: 'long' }).format(d)),
+          h('span', {}, fmtG({ day: 'numeric', month: 'short' }).format(d), ' · ', fmtH({ day: 'numeric', month: 'short' }).format(d))),
+        h('div', { class: 'prog-plans' },
+          planned.length ? planned.map(({ planId, recurring }) => {
+            const p = db.plan(planId);
+            return h('span', { class: 'pchip' + (doneOn(k, planId) ? ' done' : '') }, doneOn(k, planId) ? '✓ ' : '', recurring ? '🔁 ' : '', p.name);
+          }) : h('span', { class: 'muted small' }, 'راحة')),
+        h('button', { class: 'icon-btn sm add', 'aria-label': 'إضافة تمرين لهذا اليوم',
+          onclick: (ev) => { ev.stopPropagation(); addPlanSheet(k, viewCalendar); } }, icon('plus')));
+    }));
+
   const selDate = new Date(cal.sel + 'T12:00:00');
   const daySessions = byDay[cal.sel] || [];
-  const dayPlans = (sched[cal.sel] || []).map((s) => db.plan(s.planId)).filter(Boolean);
+  const dayPlans = db.scheduledFor(cal.sel);
   const weekLabel = isThisWeek ? 'هذا الأسبوع' : rel();
 
   put($view(),
-    header('التقويم', { back: false }),
+    header('التقويم', { back: false, right: h('button', { class: 'icon-btn plus-btn', 'aria-label': 'توزيع التمارين على الأسبوع',
+      onclick: () => openWeekPlanner(cal.week, viewCalendar) }, icon('plus')) }),
     h('main', { class: 'page' },
       h('div', { class: 'card week-card' },
         h('div', { class: 'cal-head' },
@@ -758,14 +781,20 @@ function viewCalendar() {
         h('div', { class: 'dates' },
           h('span', {}, fmtG({ day: 'numeric', month: 'long', year: 'numeric' }).format(selDate), ' م'),
           h('span', {}, fmtH({ day: 'numeric', month: 'long', year: 'numeric' }).format(selDate)))),
-      dayPlans.map((p) => h('div', { class: 'card plan' },
-        h('div', { class: 'plan-main' }, h('h3', {}, '📌 ', p.name), h('p', { class: 'muted' }, 'مجدول · ', p.muscles.map(mAr).join('، '))),
-        h('div', { class: 'plan-actions' },
-          h('button', { class: 'icon-btn danger', 'aria-label': 'إزالة', onclick: () => { db.unschedule(cal.sel, p.id); viewCalendar(); } }, icon('x')),
-          h('button', { class: 'btn primary sm', onclick: () => startSession(p.id) }, icon('play'), 'ابدأ')))),
+      dayPlans.map(({ planId, recurring }) => {
+        const p = db.plan(planId);
+        const done = doneOn(cal.sel, planId);
+        return h('div', { class: 'card plan' + (done ? ' done' : '') },
+          h('div', { class: 'plan-main' }, h('h3', {}, done ? '✅ ' : '📌 ', p.name),
+            h('p', { class: 'muted' }, recurring ? '🔁 كل ' + fmtG({ weekday: 'long' }).format(selDate) : 'لهذا اليوم فقط', ' · ', p.muscles.map(mAr).join('، '))),
+          h('div', { class: 'plan-actions' },
+            h('button', { class: 'icon-btn danger', 'aria-label': 'إزالة', onclick: () => removePlanFrom(cal.sel, planId, recurring, viewCalendar) }, icon('x')),
+            done ? h('span', { class: 'done-tag' }, 'أُنجز') : h('button', { class: 'btn primary sm', onclick: () => startSession(p.id) }, icon('play'), 'ابدأ')));
+      }),
       daySessions.map(sessionCard),
       !daySessions.length && !dayPlans.length ? h('p', { class: 'muted center' }, 'لا يوجد تمرين في هذا اليوم') : null,
-      db.state.plans.length ? h('button', { class: 'btn outline block', onclick: scheduleSheet }, icon('cal'), 'جدولة خطة في هذا اليوم') : null));
+      h('button', { class: 'btn outline block', onclick: () => addPlanSheet(cal.sel, viewCalendar) }, icon('plus'), 'إضافة تمرين لهذا اليوم'),
+      program));
 
   function rel() {
     const diff = Math.round((cal.week - weekStartOf(new Date())) / (7 * 864e5));
@@ -779,12 +808,75 @@ function viewCalendar() {
     cal.sel = dateKey(addDays(new Date(cal.sel + 'T12:00:00'), 7 * d));
     viewCalendar();
   }
-  function scheduleSheet() {
-    let close;
-    close = openSheet(h('div', {}, db.state.plans.map((p) => h('button', { class: 'row-btn', onclick: () => {
-      db.schedule(cal.sel, p.id); close(); viewCalendar();
-    } }, p.name, h('span', { class: 'muted' }, p.muscles.map(mAr).join('، '))))), { title: 'اختر خطة' });
+}
+
+/* ===== جدولة الخطط على أيام الأسبوع ===== */
+let repeatWeekly = true; // آخر اختيار للمستخدم
+
+function removePlanFrom(k, planId, recurring, done) {
+  if (recurring) {
+    const dow = new Date(k + 'T12:00:00').getDay();
+    const day = fmtG({ weekday: 'long' }).format(new Date(k + 'T12:00:00'));
+    if (!confirm(`هذه الخطة متكررة كل ${day}. إزالتها من البرنامج الأسبوعي؟`)) return;
+    db.removeWeekly(dow, planId);
+  } else {
+    db.unschedule(k, planId);
   }
+  done();
+}
+
+/** ورقة اختيار خطة لإضافتها إلى يوم، مع خيار التكرار الأسبوعي */
+function addPlanSheet(k, done) {
+  const date = new Date(k + 'T12:00:00');
+  const dayName = fmtG({ weekday: 'long' }).format(date);
+  let close;
+  if (!db.state.plans.length) {
+    close = openSheet(h('div', { class: 'empty' },
+      h('h2', {}, 'لا توجد خطط بعد'),
+      h('p', {}, 'أنشئ خطة أولًا: اختر العضلة من الرئيسية ثم «خطّط تمرينًا»، وبعدها وزّعها على أيام الأسبوع.'),
+      h('button', { class: 'btn primary block', onclick: () => { close(); go('#/home'); } }, 'إلى خريطة الجسم')), { title: 'إضافة تمرين' });
+    return;
+  }
+  const existing = new Set(db.scheduledFor(k).map((p) => p.planId));
+  const seg = h('div', { class: 'seg wide' });
+  const drawSeg = () => put(seg,
+    h('button', { class: repeatWeekly ? 'on' : '', onclick: () => { repeatWeekly = true; drawSeg(); } }, '🔁 كل ', dayName),
+    h('button', { class: !repeatWeekly ? 'on' : '', onclick: () => { repeatWeekly = false; drawSeg(); } }, 'هذا اليوم فقط'));
+  drawSeg();
+  close = openSheet(h('div', {},
+    h('p', { class: 'muted small' }, dayName, ' ', fmtG({ day: 'numeric', month: 'long' }).format(date), ' · ', fmtH({ day: 'numeric', month: 'long' }).format(date)),
+    seg,
+    db.state.plans.map((p) => h('button', { class: 'row-btn' + (existing.has(p.id) ? ' added' : ''), disabled: existing.has(p.id), onclick: () => {
+      if (repeatWeekly) db.addWeekly(date.getDay(), p.id, k); else db.schedule(k, p.id);
+      close(); toast('أُضيفت ' + p.name + (repeatWeekly ? ' — كل ' + dayName : '')); done();
+    } }, h('span', {}, p.name), h('span', { class: 'muted' }, existing.has(p.id) ? 'مضافة' : p.muscles.map(mAr).join('، '))))),
+  { title: 'إضافة تمرين' });
+}
+
+/** محرر توزيع الخطط على أيام الأسبوع (الأحد ← السبت) */
+function openWeekPlanner(weekStart, done) {
+  const body = h('div', { class: 'planner' });
+  const draw = () => {
+    const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+    put(body,
+      h('p', { class: 'muted small' }, 'اضغط ＋ بجانب اليوم لإضافة خطة. 🔁 تعني أنها تتكرر كل أسبوع.'),
+      days.map((d) => {
+        const k = dateKey(d);
+        const planned = db.scheduledFor(k);
+        return h('div', { class: 'pl-row' },
+          h('div', { class: 'prog-day' }, h('b', {}, fmtG({ weekday: 'long' }).format(d)),
+            h('span', {}, fmtG({ day: 'numeric', month: 'short' }).format(d), ' · ', fmtH({ day: 'numeric', month: 'short' }).format(d))),
+          h('div', { class: 'prog-plans' },
+            planned.length ? planned.map(({ planId, recurring }) => h('span', { class: 'pchip' },
+              recurring ? '🔁 ' : '', db.plan(planId).name,
+              h('button', { class: 'pchip-x', 'aria-label': 'إزالة', onclick: () => removePlanFrom(k, planId, recurring, draw) }, '×')))
+              : h('span', { class: 'muted small' }, 'راحة')),
+          h('button', { class: 'icon-btn sm add', 'aria-label': 'إضافة', onclick: () => addPlanSheet(k, draw) }, icon('plus')));
+      }),
+      h('div', { class: 'sheet-foot' }, h('button', { class: 'btn primary block', onclick: () => close() }, 'تم')));
+  };
+  const close = openSheet(body, { title: 'توزيع التمارين على الأسبوع', onClose: done });
+  draw();
 }
 
 function stat(v, l) { return h('div', { class: 'stat' }, h('b', {}, v), h('span', {}, l)); }
