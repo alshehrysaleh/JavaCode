@@ -546,68 +546,105 @@ function viewSession() {
   }
 }
 
-/* ============ تبويب التقويم ============ */
-const cal = { y: new Date().getFullYear(), m: new Date().getMonth(), sel: dateKey() };
+/* ============ تبويب التقويم (عرض أسبوعي: الأحد ← السبت، ميلادي وهجري) ============ */
 const sessionDay = (s) => s.localDate || s.date.slice(0, 10);
+const fmtG = (o) => new Intl.DateTimeFormat('ar-SA-u-ca-gregory-nu-latn', o);
+const fmtH = (o) => new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura-nu-latn', o);
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const weekStartOf = (d) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12); return addDays(x, -x.getDay()); }; // الأحد
+const cal = { week: weekStartOf(new Date()), sel: dateKey() };
+
+/** نص نطاق من تاريخين، مع حذف الشهر/السنة المكررة */
+function rangeText(fmt, a, b) {
+  const pa = Object.fromEntries(fmt({ day: 'numeric', month: 'long', year: 'numeric' }).formatToParts(a).map((p) => [p.type, p.value]));
+  const pb = Object.fromEntries(fmt({ day: 'numeric', month: 'long', year: 'numeric' }).formatToParts(b).map((p) => [p.type, p.value]));
+  const era = (p) => (p.era ? ' ' + p.era : '');
+  if (pa.year !== pb.year) return `${pa.day} ${pa.month} ${pa.year} – ${pb.day} ${pb.month} ${pb.year}${era(pb)}`;
+  if (pa.month !== pb.month) return `${pa.day} ${pa.month} – ${pb.day} ${pb.month} ${pb.year}${era(pb)}`;
+  return `${pa.day} – ${pb.day} ${pb.month} ${pb.year}${era(pb)}`;
+}
 
 function viewCalendar() {
-  const first = new Date(cal.y, cal.m, 1);
-  const days = new Date(cal.y, cal.m + 1, 0).getDate();
-  // الأسبوع يبدأ بالسبت
-  const offset = (first.getDay() + 1) % 7;
-  const monthName = new Intl.DateTimeFormat('ar-SA-u-ca-gregory-nu-latn', { month: 'long', year: 'numeric' }).format(first);
   const byDay = {};
   db.state.sessions.forEach((s) => { (byDay[sessionDay(s)] ||= []).push(s); });
   const sched = {};
   db.state.schedule.forEach((s) => { (sched[s.date] ||= []).push(s); });
   const today = dateKey();
-  const monthKey = `${cal.y}-${String(cal.m + 1).padStart(2, '0')}`;
-  const monthSessions = db.state.sessions.filter((s) => sessionDay(s).startsWith(monthKey));
+  const days = Array.from({ length: 7 }, (_, i) => addDays(cal.week, i));
+  const keys = days.map((d) => dateKey(d));
+  const weekSessions = keys.flatMap((k) => byDay[k] || []);
+  const isThisWeek = keys.includes(today);
 
-  const grid = h('div', { class: 'cal-grid' },
-    ['س', 'ح', 'ن', 'ث', 'ر', 'خ', 'ج'].map((d) => h('div', { class: 'cal-dow' }, d)),
-    Array.from({ length: offset }, () => h('div')),
-    Array.from({ length: days }, (_, i) => {
-      const k = `${monthKey}-${String(i + 1).padStart(2, '0')}`;
+  const strip = h('div', { class: 'week-strip' },
+    days.map((d, i) => {
+      const k = keys[i];
       return h('button', {
-        class: ['cal-day', k === today && 'today', k === cal.sel && 'sel', byDay[k] && 'has', sched[k] && 'plan'].filter(Boolean).join(' '),
+        class: ['wday', k === today && 'today', k === cal.sel && 'sel', byDay[k] && 'has', sched[k] && 'plan'].filter(Boolean).join(' '),
         onclick: () => { cal.sel = k; viewCalendar(); },
-      }, fmtNum(i + 1), h('i'));
+      },
+        h('span', { class: 'wd-name' }, fmtG({ weekday: 'short' }).format(d)),
+        h('b', { class: 'wd-g' }, fmtG({ day: 'numeric' }).format(d)),
+        h('span', { class: 'wd-h' }, fmtH({ day: 'numeric' }).format(d)),
+        h('i'));
     }));
+  // السحب يمينًا/يسارًا للتنقل بين الأسابيع
+  let x0 = null;
+  strip.addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; }, { passive: true });
+  strip.addEventListener('touchend', (e) => {
+    if (x0 == null) return;
+    const dx = e.changedTouches[0].clientX - x0;
+    x0 = null;
+    if (Math.abs(dx) > 50) shift(dx > 0 ? 1 : -1); // في RTL السحب لليمين = الأسبوع التالي
+  });
 
   const selDate = new Date(cal.sel + 'T12:00:00');
-  const hijri = new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura-nu-latn', { day: 'numeric', month: 'long', year: 'numeric' }).format(selDate);
-  const greg = new Intl.DateTimeFormat('ar-SA-u-ca-gregory-nu-latn', { weekday: 'long', day: 'numeric', month: 'long' }).format(selDate);
   const daySessions = byDay[cal.sel] || [];
   const dayPlans = (sched[cal.sel] || []).map((s) => db.plan(s.planId)).filter(Boolean);
+  const weekLabel = isThisWeek ? 'هذا الأسبوع' : rel();
 
-  put($view(), 
+  put($view(),
     header('التقويم', { back: false }),
     h('main', { class: 'page' },
-      h('div', { class: 'stats' },
-        stat(fmtNum(monthSessions.length), 'تمارين هذا الشهر'),
-        stat(fmtNum(Math.round(monthSessions.reduce((n, s) => n + s.durationSec, 0) / 60)), 'دقيقة'),
-        stat(fmtNum(streak(byDay)), 'أيام متتالية')),
-      h('div', { class: 'card' },
+      h('div', { class: 'card week-card' },
         h('div', { class: 'cal-head' },
-          h('button', { class: 'icon-btn', 'aria-label': 'الشهر السابق', onclick: () => shift(-1) }, icon('back')),
-          h('b', {}, monthName),
-          h('button', { class: 'icon-btn flip-x', 'aria-label': 'الشهر التالي', onclick: () => shift(1) }, icon('back'))),
-        grid,
-        h('div', { class: 'legend' }, h('span', { class: 'dot has' }), 'تمرين منجز', h('span', { class: 'dot plan' }), 'تمرين مجدول')),
-      h('h2', { class: 'sec' }, greg, h('small', { class: 'muted' }, ' · ', hijri)),
+          h('button', { class: 'icon-btn', 'aria-label': 'الأسبوع السابق', onclick: () => shift(-1) }, icon('back')),
+          h('div', { class: 'week-title' },
+            h('b', {}, rangeText(fmtG, days[0], days[6])),
+            h('span', {}, rangeText(fmtH, days[0], days[6]))),
+          h('button', { class: 'icon-btn flip-x', 'aria-label': 'الأسبوع التالي', onclick: () => shift(1) }, icon('back'))),
+        strip,
+        h('div', { class: 'week-foot' },
+          h('span', { class: 'muted small' }, weekLabel),
+          !isThisWeek ? h('button', { class: 'btn ghost sm', onclick: () => { cal.week = weekStartOf(new Date()); cal.sel = today; viewCalendar(); } }, 'العودة لليوم') : null,
+          h('span', { class: 'legend' }, h('span', { class: 'dot has' }), 'منجز', h('span', { class: 'dot plan' }), 'مجدول'))),
+      h('div', { class: 'stats' },
+        stat(fmtNum(weekSessions.length), 'تمارين الأسبوع'),
+        stat(fmtNum(Math.round(weekSessions.reduce((n, s) => n + s.durationSec, 0) / 60)), 'دقيقة'),
+        stat(fmtNum(new Set(weekSessions.flatMap((s) => s.muscles)).size), 'عضلات مُدرَّبة')),
+      h('div', { class: 'day-title' },
+        h('h2', { class: 'sec' }, fmtG({ weekday: 'long' }).format(selDate), cal.sel === today ? h('span', { class: 'today-tag' }, 'اليوم') : null),
+        h('div', { class: 'dates' },
+          h('span', {}, fmtG({ day: 'numeric', month: 'long', year: 'numeric' }).format(selDate), ' م'),
+          h('span', {}, fmtH({ day: 'numeric', month: 'long', year: 'numeric' }).format(selDate)))),
       dayPlans.map((p) => h('div', { class: 'card plan' },
-        h('div', { class: 'plan-main' }, h('h3', {}, '📌 ', p.name), h('p', { class: 'muted' }, 'مجدول')),
+        h('div', { class: 'plan-main' }, h('h3', {}, '📌 ', p.name), h('p', { class: 'muted' }, 'مجدول · ', p.muscles.map(mAr).join('، '))),
         h('div', { class: 'plan-actions' },
           h('button', { class: 'icon-btn danger', 'aria-label': 'إزالة', onclick: () => { db.unschedule(cal.sel, p.id); viewCalendar(); } }, icon('x')),
           h('button', { class: 'btn primary sm', onclick: () => startSession(p.id) }, icon('play'), 'ابدأ')))),
       daySessions.map(sessionCard),
-      !daySessions.length && !dayPlans.length ? h('p', { class: 'muted center' }, 'لا يوجد شيء في هذا اليوم') : null,
+      !daySessions.length && !dayPlans.length ? h('p', { class: 'muted center' }, 'لا يوجد تمرين في هذا اليوم') : null,
       db.state.plans.length ? h('button', { class: 'btn outline block', onclick: scheduleSheet }, icon('cal'), 'جدولة خطة في هذا اليوم') : null));
 
+  function rel() {
+    const diff = Math.round((cal.week - weekStartOf(new Date())) / (7 * 864e5));
+    const n = Math.abs(diff);
+    const w = n === 1 ? 'أسبوع' : n === 2 ? 'أسبوعين' : `${fmtNum(n)} أسابيع`;
+    return diff < 0 ? `قبل ${w}` : `بعد ${w}`;
+  }
   function shift(d) {
-    cal.m += d;
-    if (cal.m < 0) { cal.m = 11; cal.y--; } else if (cal.m > 11) { cal.m = 0; cal.y++; }
+    cal.week = addDays(cal.week, 7 * d);
+    // نقل اليوم المختار إلى نفس اليوم في الأسبوع الجديد
+    cal.sel = dateKey(addDays(new Date(cal.sel + 'T12:00:00'), 7 * d));
     viewCalendar();
   }
   function scheduleSheet() {
@@ -619,14 +656,6 @@ function viewCalendar() {
 }
 
 function stat(v, l) { return h('div', { class: 'stat' }, h('b', {}, v), h('span', {}, l)); }
-
-function streak(byDay) {
-  let n = 0;
-  const d = new Date();
-  if (!byDay[dateKey(d)]) d.setDate(d.getDate() - 1);
-  while (byDay[dateKey(d)]) { n++; d.setDate(d.getDate() - 1); }
-  return n;
-}
 
 function sessionCard(s) {
   const unit = db.settings.unit === 'kg' ? 'كجم' : 'رطل';
