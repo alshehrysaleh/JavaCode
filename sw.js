@@ -1,10 +1,10 @@
 // عامل الخدمة: يجعل التطبيق يعمل دون اتصال داخل النادي
-const VERSION = 'v5';
+const VERSION = 'v6';
 const SHELL = `shell-${VERSION}`;
 const MEDIA = 'media-v1';
 const ASSETS = [
   './', 'index.html', 'css/styles.css', 'js/app.js', 'js/bodymap.js', 'js/store.js',
-  'js/labels.js', 'js/exercises.js', 'data/exercises.json', 'manifest.webmanifest', 'icons/icon.svg',
+  'js/labels.js', 'js/exercises.js', 'js/photos.js', 'data/exercises.json', 'manifest.webmanifest', 'icons/icon.svg',
 ];
 
 self.addEventListener('install', (e) => {

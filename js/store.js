@@ -6,6 +6,7 @@ const DEFAULTS = () => ({
   sessions: [],   // {id, planId, name, muscles[], date, durationSec, entries:[{exId, sets:[{w, r, done}]}]}
   schedule: [],   // {date:'YYYY-MM-DD', planId}
   favorites: [],  // معرّفات التمارين المفضلة
+  custom: [],     // أجهزة أضافها المستخدم من ناديه: {id, name, ar, primary[], equipment, note}
   weekly: [],     // برنامج أسبوعي ثابت: {dow: 0..6 (الأحد=0), planId, from:'YYYY-MM-DD'}
   settings: { unit: 'kg', rest: 90, gif: true, defaultSets: 3, defaultReps: 10, view: 'grid', showAdvanced: false },
 });
@@ -53,6 +54,18 @@ export const db = {
       .filter((x) => x.hit > 0)
       .sort((a, b) => b.hit - a.hit || (b.p.updatedAt || 0) - (a.p.updatedAt || 0))
       .map((x) => x.p);
+  },
+
+  upsertCustom(c) {
+    const i = state.custom.findIndex((x) => x.id === c.id);
+    if (i >= 0) state.custom[i] = c; else state.custom.unshift(c);
+    save();
+  },
+  deleteCustom(id) {
+    state.custom = state.custom.filter((x) => x.id !== id);
+    state.favorites = state.favorites.filter((x) => x !== id);
+    state.plans.forEach((p) => { p.exercises = p.exercises.filter((x) => x.exId !== id); });
+    save();
   },
 
   isFav(id) { return state.favorites.includes(id); },

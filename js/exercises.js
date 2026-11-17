@@ -1,19 +1,27 @@
 // مستودع التمارين: تحميل قاعدة البيانات + الوسائط المتحركة
 import { db } from './store.js';
+import { hasPhoto, photoUrl } from './photos.js';
 
 const IMG_BASE = 'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/';
 // مصدر GIF اختياري (ExerciseDB). يُجلب من جهاز المستخدم عند الطلب، ويُرجع للصور عند الفشل.
 const GIF_API = 'https://exercisedb-api.vercel.app/api/v1/exercises/search';
 
+let base = [];
 let all = [];
 let byId = new Map();
 
 export async function loadExercises() {
-  if (all.length) return all;
+  if (base.length) return all;
   const res = await fetch('data/exercises.json');
-  all = await res.json();
-  byId = new Map(all.map((e) => [e.id, e]));
+  base = await res.json();
+  setCustom([]);
   return all;
+}
+
+/** يدمج أجهزة النادي التي أضافها المستخدم في المستودع (تظهر أولًا) */
+export function setCustom(list) {
+  all = [...list.map((c) => ({ secondary: [], category: 'strength', level: 'beginner', mechanic: null, images: 0, instructions: [], ...c, custom: true })), ...base];
+  byId = new Map(all.map((e) => [e.id, e]));
 }
 
 export const exercises = () => all;
@@ -109,7 +117,7 @@ async function frameSrcs(e) {
  * عنصر وسائط متحرك: يبدّل بين صورتي الحركة (بداية/نهاية) فيظهر كأنه GIF،
  * وإن فُعّل خيار GIF ووُجد GIF متاح يُعرض بدلًا منهما.
  */
-export function mediaEl(e, { small = false } = {}) {
+export function mediaEl(e, { small = false, own = true } = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'media loading' + (small ? ' small' : '');
   const img = document.createElement('img');
@@ -118,6 +126,18 @@ export function mediaEl(e, { small = false } = {}) {
   img.onload = () => wrap.classList.remove('loading');
   img.onerror = () => { wrap.classList.remove('loading'); wrap.classList.add('noimg'); };
   wrap.appendChild(img);
+
+  // صورة جهاز النادي التي صوّرها المستخدم لها الأولوية
+  if (own && hasPhoto(e.id)) {
+    wrap.classList.add('own');
+    photoUrl(e.id).then((u) => { if (u) img.src = u; });
+    const badge = document.createElement('span');
+    badge.className = 'own-badge';
+    badge.textContent = '📷 ناديك';
+    wrap.appendChild(badge);
+    return wrap;
+  }
+  if (e.custom) { wrap.classList.remove('loading'); wrap.classList.add('noimg'); return wrap; }
 
   if (small) {
     thumbSrc(e).then((src) => { img.src = src; });

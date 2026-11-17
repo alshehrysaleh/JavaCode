@@ -1,7 +1,8 @@
 import { renderBody, MUSCLES_BY_SIDE } from './bodymap.js';
 import { db, uid, dateKey } from './store.js';
 import { MUSCLE_AR, EQUIPMENT_AR, LEVEL_AR, CATEGORY_AR, mAr, eqAr } from './labels.js';
-import { loadExercises, ex, forMuscles, search, mediaEl, clearGifCache } from './exercises.js';
+import { loadExercises, ex, forMuscles, search, mediaEl, clearGifCache, setCustom } from './exercises.js';
+import { initPhotos, hasPhoto, savePhoto, deletePhoto, exportPhotos, importPhotos, clearPhotos } from './photos.js';
 
 /* ============ أدوات DOM ============ */
 function h(tag, attrs = {}, ...kids) {
@@ -202,8 +203,9 @@ function applyPrefs(items, f = {}) {
     items = items.filter((e) => !ADVANCED_CATS.has(e.category));
     hidden = n - items.length;
   }
-  // المفضلة أولًا مع الحفاظ على الترتيب
-  items = [...items.filter((e) => db.isFav(e.id)), ...items.filter((e) => !db.isFav(e.id))];
+  // الترتيب: المفضلة، ثم أجهزة ناديك (المضافة أو المصوّرة)، ثم البقية — مع الحفاظ على الترتيب داخل كل فئة
+  const rankOf = (e) => (db.isFav(e.id) ? 0 : e.custom || hasPhoto(e.id) ? 1 : 2);
+  items = [0, 1, 2].flatMap((r) => items.filter((e) => rankOf(e) === r));
   return { items, hidden };
 }
 
@@ -482,13 +484,27 @@ function viewLibrary(params) {
   };
   put($view(), 
     header('مستودع التمارين', { back: false }),
-    h('main', { class: 'page' }, libraryFilters(lib, renderList, [], viewSwitch(() => renderList())), listEl));
+    h('main', { class: 'page' },
+      h('button', { class: 'gym-cta', onclick: () => customExerciseSheet(null, () => viewLibrary(new URLSearchParams())) },
+        h('span', { class: 'gym-cta-ic' }, '📷'),
+        h('span', {}, h('b', {}, 'أضف جهازًا من ناديك'), h('small', {}, 'صوّر الجهاز واختر العضلة، ليظهر بصورته الحقيقية')) ),
+      libraryFilters(lib, renderList, [], viewSwitch(() => renderList())), listEl));
   renderList();
 }
 
 function exerciseDetail(e) {
-  return h('div', { class: 'ex-detail' },
+  const wrap = h('div', { class: 'ex-detail' });
+  const draw = () => put(wrap, exerciseDetailParts(e, draw));
+  draw();
+  return wrap;
+}
+
+function exerciseDetailParts(e, redraw) {
+  const own = hasPhoto(e.id);
+  return [
     mediaEl(e),
+    photoTools(e, redraw),
+    own && !e.custom ? h('details', { class: 'movement' }, h('summary', {}, 'طريقة الحركة (الصورة التوضيحية)'), mediaEl(e, { own: false })) : null,
     h('div', { class: 'ex-title' }, exNames(e)),
     h('div', { class: 'tags' },
       e.primary.map((m) => h('span', { class: 'tag m' }, mAr(m))),
@@ -497,8 +513,92 @@ function exerciseDetail(e) {
       e.level && h('span', { class: 'tag' }, LEVEL_AR[e.level] || e.level),
       e.category && h('span', { class: 'tag' }, CATEGORY_AR[e.category] || e.category)),
     favButton(e),
-    h('h3', { class: 'sec' }, 'طريقة الأداء'),
-    h('ol', { class: 'steps', dir: 'ltr' }, e.instructions.map((s) => h('li', {}, s))));
+    e.custom && e.note ? h('p', { class: 'note' }, e.note) : null,
+    e.instructions.length ? h('h3', { class: 'sec' }, 'طريقة الأداء') : null,
+    e.instructions.length ? h('ol', { class: 'steps', dir: 'ltr' }, e.instructions.map((s) => h('li', {}, s))) : null,
+    e.custom ? h('div', { class: 'row-actions' },
+      h('button', { class: 'btn outline sm', onclick: () => customExerciseSheet(e, () => { redraw(); }) }, icon('edit'), 'تعديل الجهاز'),
+      h('button', { class: 'btn ghost danger sm', onclick: async () => {
+        if (!confirm('حذف هذا الجهاز من المستودع وكل الخطط؟')) return;
+        db.deleteCustom(e.id); setCustom(db.state.custom);
+        try { await deletePhoto(e.id); } catch { /* ignore */ }
+        toast('تم الحذف'); document.querySelectorAll('.sheet-backdrop').forEach((x) => x.remove()); go('#/library');
+      } }, icon('trash'), 'حذف')) : null,
+  ];
+}
+
+/** اختيار صورة من الكاميرا أو الألبوم */
+function pickImage() {
+  return new Promise((resolve) => {
+    const inp = h('input', { type: 'file', accept: 'image/*', hidden: true });
+    inp.onchange = () => { resolve(inp.files[0] || null); inp.remove(); };
+    document.body.append(inp);
+    inp.click();
+  });
+}
+
+/** أزرار تصوير جهاز النادي لهذا التمرين */
+function photoTools(e, redraw) {
+  const own = hasPhoto(e.id);
+  return h('div', { class: 'photo-tools' + (own ? ' has' : '') },
+    h('button', { class: 'btn sm ' + (own ? 'outline' : 'primary'), onclick: async () => {
+      const f = await pickImage();
+      if (!f) return;
+      try { await savePhoto(e.id, f); toast('حُفظت صورة جهاز ناديك'); redraw(); refreshLists(); }
+      catch (err) { alert('تعذر حفظ الصورة: ' + err.message); }
+    } }, '📷 ', own ? 'تغيير صورة الجهاز' : 'صوّر الجهاز في ناديك'),
+    own && !e.custom ? h('button', { class: 'btn ghost sm', onclick: async () => {
+      await deletePhoto(e.id); toast('عادت الصورة الأصلية'); redraw(); refreshLists();
+    } }, 'استعادة الصورة الأصلية') : null);
+}
+
+/** إعادة رسم الصفحة الحالية (لتظهر الصورة الجديدة في القوائم) */
+function refreshLists() {
+  if (!document.querySelector('.sheet-backdrop')) route();
+}
+
+/** نموذج إضافة/تعديل جهاز من النادي */
+function customExerciseSheet(existing, done) {
+  const c = existing ? { ...existing } : { id: 'custom_' + uid(), name: '', ar: '', primary: [], equipment: 'machine', note: '' };
+  let file = null;
+  const preview = h('div', { class: 'cx-photo' });
+  const drawPreview = () => {
+    if (file) put(preview, h('img', { src: URL.createObjectURL(file), alt: '' }));
+    else if (existing && hasPhoto(c.id)) put(preview, mediaEl(existing));
+    else put(preview, h('span', {}, '📷', h('br'), 'اضغط لتصوير الجهاز'));
+  };
+  preview.onclick = async () => { const f = await pickImage(); if (f) { file = f; drawPreview(); } };
+  drawPreview();
+  const muscles = h('div', { class: 'chips wrap' });
+  const drawMuscles = () => put(muscles, Object.keys(MUSCLE_AR).map((m) => h('button', {
+    class: 'chip' + (c.primary.includes(m) ? ' on' : ''),
+    onclick: () => { c.primary = c.primary.includes(m) ? c.primary.filter((x) => x !== m) : [...c.primary, m]; drawMuscles(); },
+  }, mAr(m))));
+  drawMuscles();
+  let close;
+  const form = h('div', { class: 'cx-form' },
+    preview,
+    h('label', { class: 'field' }, h('span', {}, 'اسم الجهاز بالعربي *'),
+      h('input', { type: 'text', value: c.ar, placeholder: 'مثال: جهاز سحب الظهر', oninput: (ev) => { c.ar = ev.target.value; } })),
+    h('label', { class: 'field' }, h('span', {}, 'الاسم بالإنجليزية (كما هو مكتوب على الجهاز)'),
+      h('input', { type: 'text', dir: 'ltr', value: c.name, placeholder: 'e.g. Technogym Lat Machine', oninput: (ev) => { c.name = ev.target.value; } })),
+    h('div', { class: 'field' }, h('span', {}, 'العضلات المستهدفة *'), muscles),
+    h('label', { class: 'field' }, h('span', {}, 'نوع الأداة'),
+      h('select', { class: 'select', onchange: (ev) => { c.equipment = ev.target.value; } },
+        Object.entries(EQUIPMENT_AR).map(([k, v]) => h('option', { value: k, selected: c.equipment === k }, v)))),
+    h('label', { class: 'field' }, h('span', {}, 'ملاحظات (اختياري)'),
+      h('input', { type: 'text', value: c.note || '', placeholder: 'مثال: المقعد على رقم 4', oninput: (ev) => { c.note = ev.target.value; } })),
+    h('div', { class: 'sheet-foot' },
+      h('button', { class: 'btn primary block', onclick: async () => {
+        if (!c.ar.trim()) return alert('اكتب اسم الجهاز بالعربي');
+        if (!c.primary.length) return alert('اختر عضلة واحدة على الأقل');
+        if (!file && !hasPhoto(c.id)) return alert('صوّر الجهاز أولًا');
+        c.name = c.name.trim() || c.ar.trim();
+        try { if (file) await savePhoto(c.id, file); } catch (err) { return alert('تعذر حفظ الصورة: ' + err.message); }
+        db.upsertCustom(c); setCustom(db.state.custom);
+        close(); toast(existing ? 'تم التعديل' : 'أُضيف الجهاز إلى المستودع'); done && done();
+      } }, existing ? 'حفظ التعديل' : 'حفظ الجهاز')));
+  close = openSheet(form, { title: existing ? 'تعديل جهاز' : 'جهاز جديد من ناديك' });
 }
 
 function favButton(e) {
@@ -909,7 +1009,14 @@ function viewSettings() {
 
   const fileIn = h('input', { type: 'file', accept: 'application/json', hidden: true, onchange: async (e) => {
     const f = e.target.files[0]; if (!f) return;
-    try { db.importJSON(await f.text()); toast('تم استيراد البيانات'); viewSettings(); } catch (err) { alert('تعذر الاستيراد: ' + err.message); }
+    try {
+      const text = await f.text();
+      db.importJSON(text);
+      const photos = JSON.parse(text).photos;
+      if (photos) await importPhotos(photos);
+      setCustom(db.state.custom);
+      toast('تم استيراد البيانات'); viewSettings();
+    } catch (err) { alert('تعذر الاستيراد: ' + err.message); }
   } });
 
   put($view(), 
@@ -931,17 +1038,19 @@ function viewSettings() {
       h('div', { class: 'card settings' },
         h('p', { class: 'muted small' }, 'بياناتك محفوظة على هذا الجهاز فقط: ',
           fmtNum(db.state.plans.length), ' خطة، ', fmtNum(db.state.sessions.length), ' تمرين مسجّل.'),
-        h('button', { class: 'btn outline block', onclick: exportData }, 'تصدير نسخة احتياطية (JSON)'),
+        h('button', { class: 'btn outline block', onclick: exportData }, 'تصدير نسخة احتياطية (مع صور ناديك)'),
         h('button', { class: 'btn outline block', onclick: () => fileIn.click() }, 'استيراد نسخة احتياطية'), fileIn,
         h('button', { class: 'btn ghost block', onclick: () => { clearGifCache(); toast('تم مسح ذاكرة الصور'); } }, 'مسح ذاكرة صور GIF'),
         h('button', { class: 'btn ghost danger block', onclick: () => {
-          if (confirm('حذف جميع الخطط والسجلات نهائيًا؟')) { db.reset(); setActive(null); toast('تم الحذف'); viewSettings(); }
+          if (confirm('حذف جميع الخطط والسجلات نهائيًا؟')) { db.reset(); setActive(null); setCustom([]); clearPhotos().catch(() => {}); toast('تم الحذف'); viewSettings(); }
         } }, 'حذف جميع البيانات')),
       h('p', { class: 'muted small center' },
         'مستودع التمارين: Free Exercise DB (ملكية عامة) — ', fmtNum(876), ' تمرين. صور GIF الاختيارية من ExerciseDB.')));
 
-  function exportData() {
-    const blob = new Blob([db.exportJSON()], { type: 'application/json' });
+  async function exportData() {
+    const data = JSON.parse(db.exportJSON());
+    try { data.photos = await exportPhotos(); } catch { /* بلا صور */ }
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const a = h('a', { href: URL.createObjectURL(blob), download: `gym-backup-${dateKey()}.json` });
     document.body.append(a); a.click(); a.remove();
   }
@@ -998,6 +1107,8 @@ function stopRestIfLeaving() { if (!location.hash.startsWith('#/session')) stopR
 async function boot() {
   try {
     await loadExercises();
+    setCustom(db.state.custom || []);
+    await initPhotos();
   } catch {
     put($view(), h('p', { class: 'page center' }, 'تعذر تحميل مستودع التمارين. تحقق من الاتصال ثم أعد التحميل.'));
     return;
