@@ -1,122 +1,62 @@
-// مستودع التمارين: تحميل قاعدة البيانات + الوسائط المتحركة
-import { db } from './store.js';
+// مستودع التمارين: التمارين التي يضيفها المدير من لوحة التحكم + أجهزة المستخدم الخاصة
 import { hasPhoto, photoUrl } from './photos.js';
-import { adminImages } from './content.js';
+import { adminExercises, adminImages, onContentChange, initContent } from './content.js';
 
-const IMG_BASE = 'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/';
-// مصدر GIF اختياري (ExerciseDB). يُجلب من جهاز المستخدم عند الطلب، ويُرجع للصور عند الفشل.
-const GIF_API = 'https://exercisedb-api.vercel.app/api/v1/exercises/search';
-
-let base = [];
+let custom = [];
 let all = [];
 let byId = new Map();
 
+function rebuild() {
+  all = [...custom, ...adminExercises()];
+  byId = new Map(all.map((e) => [e.id, e]));
+}
+
 export async function loadExercises() {
-  if (base.length) return all;
-  const res = await fetch('data/exercises.json');
-  base = await res.json();
-  setCustom([]);
+  initContent();
+  onContentChange(rebuild);
+  rebuild();
   return all;
 }
 
-/** يدمج أجهزة النادي التي أضافها المستخدم في المستودع (تظهر أولًا) */
+/** أجهزة أضافها المستخدم على جهازه (تظهر أولًا) */
 export function setCustom(list) {
-  all = [...list.map((c) => ({ secondary: [], category: 'strength', level: 'beginner', mechanic: null, images: 0, instructions: [], ...c, custom: true })), ...base];
-  byId = new Map(all.map((e) => [e.id, e]));
+  custom = list.map((c) => ({ secondary: [], category: 'strength', level: null, instructions: [], ...c, custom: true }));
+  rebuild();
 }
 
 export const exercises = () => all;
 export const ex = (id) => byId.get(id);
-export const imgUrl = (e, i = 0) => `${IMG_BASE}${encodeURIComponent(e.id)}/${i}.jpg`;
 
 /** تمارين تستهدف العضلات المختارة: الأساسية أولًا ثم الثانوية */
-export function forMuscles(muscles, { includeSecondary = false } = {}) {
+export function forMuscles(muscles, { includeSecondary = true } = {}) {
   const set = new Set(muscles);
   const score = (e) => {
     let s = 0;
     e.primary.forEach((m) => { if (set.has(m)) s += 10; });
-    if (includeSecondary) e.secondary.forEach((m) => { if (set.has(m)) s += 1; });
+    if (includeSecondary) (e.secondary || []).forEach((m) => { if (set.has(m)) s += 1; });
     return s;
   };
   return all
     .map((e) => [e, score(e)])
     .filter(([, s]) => s > 0)
-    .sort((a, b) => b[1] - a[1] || rank(a[0]) - rank(b[0]) || a[0].name.localeCompare(b[0].name))
+    .sort((a, b) => b[1] - a[1])
     .map(([e]) => e);
 }
 
-// تمارين شائعة في الأندية تظهر أولًا في الاقتراحات
-const POPULAR = [
-  'barbell bench press - medium grip', 'dumbbell bench press', 'incline dumbbell press', 'butterfly', 'dips - chest version',
-  'cable crossover', 'pushups', 'wide-grip lat pulldown', 'seated cable rows', 'bent over barbell row', 'pullups',
-  'one-arm dumbbell row', 'barbell squat', 'leg press', 'leg extensions', 'lying leg curls', 'romanian deadlift',
-  'barbell deadlift', 'standing calf raises', 'seated calf raise', 'dumbbell shoulder press', 'side lateral raise',
-  'reverse flyes', 'face pull', 'barbell curl', 'dumbbell bicep curl', 'hammer curls', 'triceps pushdown',
-  'dips - triceps version', 'lying triceps press', 'crunches', 'plank', 'hanging leg raise', 'barbell hip thrust',
-  'barbell shrug', 'dumbbell lunges', 'thigh adductor', 'thigh abductor', 'hyperextensions (back extensions)',
-];
-const POP = new Map(POPULAR.map((n, i) => [n, i]));
-
-// تفضيل تمارين القوة والأجهزة الشائعة في النادي
-function rank(e) {
-  const pop = POP.get(e.name.toLowerCase());
-  if (pop != null) return -100 + pop;
-  const cat = e.category === 'strength' ? 0 : e.category === 'stretching' ? 3 : 1;
-  const eq = { machine: 0, cable: 0, barbell: 0, dumbbell: 0, 'e-z curl bar': 1, 'body only': 1 }[e.equipment] ?? 2;
-  const lvl = { beginner: 0, intermediate: 0, expert: 1 }[e.level] ?? 1;
-  return cat * 10 + eq * 3 + lvl;
-}
-
 // توحيد الحروف العربية لتسهيل البحث (أ إ آ ← ا، ة ← ه، ى ← ي)
-const norm = (x = '') => x.toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/[\u064B-\u0652]/g, '');
+const norm = (x = '') => x.toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').replace(/[ً-ْ]/g, '');
 
 export function search(q, { muscle = '', equipment = '' } = {}) {
-  const t = q.trim().toLowerCase();
+  const t = norm(q.trim());
   return all.filter((e) =>
-    (!muscle || e.primary.includes(muscle)) &&
+    (!muscle || e.primary.includes(muscle) || (e.secondary || []).includes(muscle)) &&
     (!equipment || e.equipment === equipment) &&
-    (!t || e.name.toLowerCase().includes(t) || norm(e.ar).includes(norm(t))));
-}
-
-/* ===== الصور المضمّنة في التطبيق (data/img) =====
- * thumbs/<العضلة>.json : صورة مصغرة لكل تمرين
- * full/<رقم>.json      : صورتا الحركة بحجم أكبر
- * تُحمَّل من نفس موقع التطبيق فتعمل في أي استضافة ودون إنترنت بعد أول فتح. */
-const chunkCache = new Map();
-function loadChunk(path) {
-  if (!chunkCache.has(path)) {
-    chunkCache.set(path, fetch(path).then((r) => (r.ok ? r.json() : {})).catch(() => {
-      chunkCache.delete(path);
-      return {};
-    }));
-  }
-  return chunkCache.get(path);
-}
-
-const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
-  let c = n;
-  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
-function crc32(str) {
-  let c = 0xffffffff;
-  for (const b of new TextEncoder().encode(str)) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-const FULL_CHUNKS = 64;
-
-async function thumbSrc(e) {
-  const m = await loadChunk(`data/img/thumbs/${(e.primary[0] || 'other').replace(/ /g, '_')}.json`);
-  return m[e.id] || imgUrl(e, 0);
-}
-async function frameSrcs(e) {
-  const m = await loadChunk(`data/img/full/${crc32(e.id) % FULL_CHUNKS}.json`);
-  return m[e.id] || Array.from({ length: e.images }, (_, i) => imgUrl(e, i));
+    (!t || norm(e.name).includes(t) || norm(e.ar).includes(t)));
 }
 
 /**
- * عنصر وسائط متحرك: يبدّل بين صورتي الحركة (بداية/نهاية) فيظهر كأنه GIF،
- * وإن فُعّل خيار GIF ووُجد GIF متاح يُعرض بدلًا منهما.
+ * عنصر الوسائط: صورة الجهاز الشخصية ← صور/مقاطع لوحة التحكم ← أيقونة بديلة.
+ * الفيديو يُعرض صامتًا متكررًا كأنه GIF، وعند تعدد الوسائط تظهر في معرض.
  */
 export function mediaEl(e, { small = false, own = true } = {}) {
   const wrap = document.createElement('div');
@@ -128,7 +68,6 @@ export function mediaEl(e, { small = false, own = true } = {}) {
   img.onerror = () => { wrap.classList.remove('loading'); wrap.classList.add('noimg'); };
   wrap.appendChild(img);
 
-  // صورة جهاز النادي التي صوّرها المستخدم لها الأولوية
   if (own && hasPhoto(e.id)) {
     wrap.classList.add('own');
     photoUrl(e.id).then((u) => { if (u) img.src = u; });
@@ -138,128 +77,54 @@ export function mediaEl(e, { small = false, own = true } = {}) {
     wrap.appendChild(badge);
     return wrap;
   }
-  // صور لوحة التحكم تأتي بعد صورة الجهاز الشخصية وقبل الصور الافتراضية
-  const admin = own ? adminImages(e.id) : [];
-  if (admin.length) {
-    wrap.classList.add('admin');
-    // عرض عنصر (صورة/GIF أو فيديو صامت متكرر يعمل مثل GIF)
-    let vid = null;
-    const show = (m) => {
-      if (m.video) {
-        img.style.display = 'none';
-        if (!vid) {
-          vid = document.createElement('video');
-          vid.muted = true; vid.loop = true; vid.playsInline = true;
-          vid.setAttribute('muted', ''); vid.setAttribute('playsinline', '');
-          vid.preload = small ? 'metadata' : 'auto';
-          vid.autoplay = !small;
-          vid.onloadeddata = () => wrap.classList.remove('loading');
-          wrap.insertBefore(vid, img);
-        }
-        vid.src = small ? m.url + '#t=0.1' : m.url;
-        if (!small) vid.play().catch(() => {});
-      } else {
-        if (vid) { vid.pause(); vid.remove(); vid = null; }
-        img.style.display = '';
-        img.src = m.url;
+
+  const media = adminImages(e.id);
+  if (!media.length) { wrap.classList.remove('loading'); wrap.classList.add('noimg'); return wrap; }
+
+  wrap.classList.add('admin');
+  let vid = null;
+  const show = (m) => {
+    if (m.video) {
+      img.style.display = 'none';
+      if (!vid) {
+        vid = document.createElement('video');
+        vid.muted = true; vid.loop = true; vid.playsInline = true;
+        vid.setAttribute('muted', ''); vid.setAttribute('playsinline', '');
+        vid.preload = small ? 'metadata' : 'auto';
+        vid.autoplay = !small;
+        vid.onloadeddata = () => wrap.classList.remove('loading');
+        wrap.insertBefore(vid, img);
       }
+      vid.src = small ? m.url + '#t=0.1' : m.url;
+      if (!small) vid.play().catch(() => {});
+    } else {
+      if (vid) { vid.pause(); vid.remove(); vid = null; }
+      img.style.display = '';
+      img.src = m.url;
+    }
+  };
+  show(media[0]);
+  if (small || media.length === 1) return wrap;
+
+  const gal = document.createElement('div');
+  gal.className = 'gallery';
+  const thumbs = document.createElement('div');
+  thumbs.className = 'gal-thumbs';
+  media.forEach((m, i) => {
+    const b = document.createElement('button');
+    b.className = 'gal-thumb' + (i === 0 ? ' on' : '') + (m.video ? ' is-video' : '');
+    b.setAttribute('aria-label', `${m.video ? 'فيديو' : 'صورة'} ${i + 1}`);
+    let t;
+    if (m.video) { t = document.createElement('video'); t.muted = true; t.preload = 'metadata'; t.src = m.url + '#t=0.1'; }
+    else { t = document.createElement('img'); t.src = m.url; t.alt = ''; }
+    b.appendChild(t);
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      show(m);
+      thumbs.querySelectorAll('.gal-thumb').forEach((x) => x.classList.toggle('on', x === b));
     };
-    show(admin[0]);
-    if (small || admin.length === 1) return wrap;
-    const gal = document.createElement('div');
-    gal.className = 'gallery';
-    const thumbs = document.createElement('div');
-    thumbs.className = 'gal-thumbs';
-    admin.forEach((m, i) => {
-      const b = document.createElement('button');
-      b.className = 'gal-thumb' + (i === 0 ? ' on' : '') + (m.video ? ' is-video' : '');
-      b.setAttribute('aria-label', `${m.video ? 'فيديو' : 'صورة'} ${i + 1}`);
-      let t;
-      if (m.video) { t = document.createElement('video'); t.muted = true; t.preload = 'metadata'; t.src = m.url + '#t=0.1'; }
-      else { t = document.createElement('img'); t.src = m.url; t.alt = ''; }
-      b.appendChild(t);
-      b.onclick = (ev) => {
-        ev.stopPropagation();
-        show(m);
-        thumbs.querySelectorAll('.gal-thumb').forEach((x) => x.classList.toggle('on', x === b));
-      };
-      thumbs.appendChild(b);
-    });
-    gal.append(wrap, thumbs);
-    return gal;
-  }
-  if (e.custom) { wrap.classList.remove('loading'); wrap.classList.add('noimg'); return wrap; }
-
-  if (small) {
-    thumbSrc(e).then((src) => { img.src = src; });
-    return wrap;
-  }
-
-  let timer = null;
-  frameSrcs(e).then((frames) => {
-    if (!frames.length) { wrap.classList.add('noimg'); return; }
-    let frame = 0;
-    img.src = frames[0];
-    if (frames.length > 1) {
-      timer = setInterval(() => {
-        if (!wrap.isConnected && wrap.dataset.started) { clearInterval(timer); return; }
-        if (wrap.isConnected) wrap.dataset.started = '1';
-        frame = (frame + 1) % frames.length;
-        img.src = frames[frame];
-      }, 900);
-    }
+    thumbs.appendChild(b);
   });
-
-  if (db.settings.gif) {
-    findGif(e).then((g) => {
-      if (!g) return;
-      const gif = new Image();
-      gif.onload = () => {
-        clearInterval(timer);
-        img.src = g.url;
-        const cap = document.createElement('div');
-        cap.className = 'media-cap';
-        cap.textContent = `GIF: ${g.name}`;
-        wrap.appendChild(cap);
-      };
-      gif.src = g.url;
-    });
-  }
-  return wrap;
+  gal.append(wrap, thumbs);
+  return gal;
 }
-
-const GIF_CACHE_KEY = 'gymapp.gifcache';
-function gifCache() {
-  try { return JSON.parse(localStorage.getItem(GIF_CACHE_KEY) || '{}'); } catch { return {}; }
-}
-
-function cleanName(n) {
-  return n.toLowerCase()
-    .replace(/\s*-\s*(medium|wide|close)[- ]grip/g, '')
-    .replace(/[^a-z0-9 ]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-async function findGif(e) {
-  const cache = gifCache();
-  if (e.id in cache) return cache[e.id];
-  let result = null;
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 6000);
-    const q = cleanName(e.name);
-    const res = await fetch(`${GIF_API}?q=${encodeURIComponent(q)}&limit=1&threshold=0.3`, { signal: ctrl.signal });
-    clearTimeout(t);
-    if (res.ok) {
-      const j = await res.json();
-      const hit = (j.data || [])[0];
-      if (hit && hit.gifUrl) result = { url: hit.gifUrl, name: hit.name };
-    }
-  } catch { return null; } // خطأ شبكة: لا نخزّن، نعيد المحاولة لاحقًا
-  cache[e.id] = result;
-  try { localStorage.setItem(GIF_CACHE_KEY, JSON.stringify(cache)); } catch { /* ignore */ }
-  return result;
-}
-
-export function clearGifCache() { localStorage.removeItem(GIF_CACHE_KEY); }

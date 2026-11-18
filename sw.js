@@ -1,10 +1,10 @@
 // عامل الخدمة: يجعل التطبيق يعمل دون اتصال داخل النادي
-const VERSION = 'v8';
+const VERSION = 'v9';
 const SHELL = `shell-${VERSION}`;
 const MEDIA = 'media-v1';
 const ASSETS = [
   './', 'index.html', 'css/styles.css', 'js/app.js', 'js/bodymap.js', 'js/store.js',
-  'js/labels.js', 'js/exercises.js', 'js/photos.js', 'js/content.js', 'js/video2gif.js', 'js/vendor/gifenc.js', 'data/exercises.json', 'manifest.webmanifest', 'icons/icon.svg',
+  'js/labels.js', 'js/exercises.js', 'js/photos.js', 'js/content.js', 'js/video2gif.js', 'js/vendor/gifenc.js', 'manifest.webmanifest', 'icons/icon.svg',
 ];
 
 self.addEventListener('install', (e) => {
@@ -24,8 +24,10 @@ self.addEventListener('fetch', (e) => {
   if (url.origin === location.origin) {
     // الشبكة أولًا لملفات التطبيق، ثم النسخة المخزنة
     e.respondWith(fetch(req).then((res) => {
-      const copy = res.clone();
-      caches.open(SHELL).then((c) => c.put(req, copy));
+      if (res.status === 200) {
+        const copy = res.clone();
+        caches.open(SHELL).then((c) => c.put(req, copy)).catch(() => {});
+      }
       return res;
     }).catch(() => caches.match(req).then((r) => r || caches.match('index.html'))));
   } else if (isMedia) {

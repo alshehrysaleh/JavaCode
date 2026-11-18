@@ -1,8 +1,8 @@
 import { renderBody, MUSCLES_BY_SIDE } from './bodymap.js';
 import { db, uid, dateKey } from './store.js';
 import { MUSCLE_AR, EQUIPMENT_AR, LEVEL_AR, CATEGORY_AR, mAr, eqAr } from './labels.js';
-import { loadExercises, ex, forMuscles, search, mediaEl, clearGifCache, setCustom } from './exercises.js';
-import { initContent, onContentChange, contentState, override, editedIds, blobUrl, isVideoAsset, adminAccess, saveText, addImages, setImageOrder, removeImage, resetExercise, storageUsage } from './content.js';
+import { loadExercises, ex, forMuscles, search, mediaEl, setCustom } from './exercises.js';
+import { initContent, onContentChange, contentState, adminExercises, adminImages, adminAccess, createExercise, updateExercise, deleteExercise, addImages, setImageOrder, removeImage, storageUsage } from './content.js';
 import { initPhotos, hasPhoto, savePhoto, deletePhoto, exportPhotos, importPhotos, clearPhotos } from './photos.js';
 
 /* ============ أدوات DOM ============ */
@@ -167,8 +167,9 @@ function viewTrain(musclesStr) {
       h('div', { class: 'sec-row' },
         h('h2', { class: 'sec' }, 'تمارين مقترحة'),
         h('a', { href: '#/library?m=' + muscles[0], class: 'link' }, 'كل التمارين')),
-      viewSwitch(drawSug),
-      exCollection(suggestions, { onOpen: (e) => go('#/ex/' + e.id) }));
+      suggestions.length ? viewSwitch(drawSug) : null,
+      suggestions.length ? exCollection(suggestions, { onOpen: (e) => go('#/ex/' + e.id) })
+        : (noExercisesYet() || h('p', { class: 'muted center' }, 'لا توجد تمارين لهذه العضلة بعد.')));
   }
   drawSug();
 }
@@ -187,7 +188,7 @@ function planCard(p) {
 function exNames(e, { tag = 'div', num = null } = {}) {
   return h(tag, { class: 'names' },
     h('div', { class: 'en', dir: 'ltr' }, num != null ? fmtNum(num) + '. ' : '', e.name),
-    (override(e.id)?.ar || e.ar) ? h('div', { class: 'ar' }, override(e.id)?.ar || e.ar) : null);
+    e.ar && e.ar !== e.name ? h('div', { class: 'ar' }, e.ar) : null);
 }
 
 /* ===== تفضيلات العرض: المفضلة أولًا، الأجهزة فقط، إخفاء التمارين المتقدمة ===== */
@@ -199,7 +200,7 @@ function applyPrefs(items, f = {}) {
   if (f.machines) items = items.filter((e) => GYM_EQUIP.has(e.equipment));
   if (f.fav) items = items.filter((e) => db.isFav(e.id));
   let hidden = 0;
-  if (!db.settings.showAdvanced && !f.q && !f.fav) {
+  if (false) {
     const n = items.length;
     items = items.filter((e) => !ADVANCED_CATS.has(e.category));
     hidden = n - items.length;
@@ -486,9 +487,6 @@ function viewLibrary(params) {
   put($view(), 
     header('مستودع التمارين', { back: false }),
     h('main', { class: 'page' },
-      h('button', { class: 'gym-cta', onclick: () => customExerciseSheet(null, () => viewLibrary(new URLSearchParams())) },
-        h('span', { class: 'gym-cta-ic' }, '📷'),
-        h('span', {}, h('b', {}, 'أضف جهازًا من ناديك'), h('small', {}, 'صوّر الجهاز واختر العضلة، ليظهر بصورته الحقيقية')) ),
       libraryFilters(lib, renderList, [], viewSwitch(() => renderList())), listEl));
   renderList();
 }
@@ -505,19 +503,16 @@ function exerciseDetailParts(e, redraw) {
   return [
     mediaEl(e),
     photoTools(e, redraw),
-    own && !e.custom ? h('details', { class: 'movement' }, h('summary', {}, 'طريقة الحركة (الصورة التوضيحية)'), mediaEl(e, { own: false })) : null,
+    own && adminImages(e.id).length ? h('details', { class: 'movement' }, h('summary', {}, 'صور التمرين الأصلية'), mediaEl(e, { own: false })) : null,
     h('div', { class: 'ex-title' }, exNames(e)),
     h('div', { class: 'tags' },
       e.primary.map((m) => h('span', { class: 'tag m' }, mAr(m))),
-      e.secondary.map((m) => h('span', { class: 'tag m2' }, mAr(m))),
+      (e.secondary || []).map((m) => h('span', { class: 'tag m2' }, mAr(m))),
       h('span', { class: 'tag' }, eqAr(e.equipment)),
-      e.level && h('span', { class: 'tag' }, LEVEL_AR[e.level] || e.level),
-      e.category && h('span', { class: 'tag' }, CATEGORY_AR[e.category] || e.category)),
+      e.level && h('span', { class: 'tag' }, LEVEL_AR[e.level] || e.level)),
     favButton(e),
-    override(e.id)?.desc ? h('section', { class: 'about' }, h('h3', { class: 'sec' }, 'عن التمرين'), h('div', { class: 'about-text' }, override(e.id).desc)) : null,
+    e.desc ? h('section', { class: 'about' }, h('h3', { class: 'sec' }, 'عن التمرين'), h('div', { class: 'about-text' }, e.desc)) : null,
     e.custom && e.note ? h('p', { class: 'note' }, e.note) : null,
-    e.instructions.length ? h('h3', { class: 'sec' }, 'طريقة الأداء') : null,
-    e.instructions.length ? h('ol', { class: 'steps', dir: 'ltr' }, e.instructions.map((s) => h('li', {}, s))) : null,
     e.custom ? h('div', { class: 'row-actions' },
       h('button', { class: 'btn outline sm', onclick: () => customExerciseSheet(e, () => { redraw(); }) }, icon('edit'), 'تعديل الجهاز'),
       h('button', { class: 'btn ghost danger sm', onclick: async () => {
@@ -613,7 +608,23 @@ function favButton(e) {
   return b;
 }
 
+/** حالة فارغة للمستودع: لا تمارين بعد / جارٍ التحميل / لا نتائج */
+function noExercisesYet() {
+  if (adminExercises().length) return null;
+  const loading = contentState() === 'loading';
+  const box = h('div', { class: 'empty' },
+    h('div', { class: 'empty-ic' }, loading ? '⏳' : '🏋️'),
+    h('h2', {}, loading ? 'جارٍ تحميل التمارين…' : 'لم تُضف تمارين بعد'),
+    loading ? null : h('p', {}, contentState() === 'unavailable'
+      ? 'التمارين تُدار من لوحة التحكم في الرابط المنشور على claude.ai.'
+      : 'يضيف مدير التطبيق التمارين وصورها من «لوحة تحكم التمارين» في الإعدادات.'));
+  adminAccess().then((a) => { if (a.ok && !loading) box.append(h('button', { class: 'btn primary block', onclick: () => go('#/admin') }, 'فتح لوحة تحكم التمارين')); });
+  return box;
+}
+
 function emptyResults(f) {
+  const none = noExercisesYet();
+  if (none) return none;
   return h('div', { class: 'empty' },
     h('h2', {}, f.fav ? 'لا توجد تمارين مفضلة هنا بعد' : 'لا توجد نتائج'),
     h('p', {}, f.fav ? 'اضغط النجمة ★ على صورة أي تمرين ليظهر هنا وفي أعلى القوائم دائمًا.' : 'جرّب إزالة بعض الفلاتر أو تغيير كلمة البحث.'));
@@ -1009,7 +1020,7 @@ function viewSettings() {
     if (!a.ok) return;
     put(adminEntry, h('button', { class: 'gym-cta', onclick: () => go('#/admin') },
       h('span', { class: 'gym-cta-ic' }, '⚙️'),
-      h('span', {}, h('b', {}, 'لوحة تحكم المحتوى'), h('small', {}, 'غيّر صور التمارين وأضف صورًا، وحرّر نصوصها التعريفية'))));
+      h('span', {}, h('b', {}, 'لوحة تحكم التمارين'), h('small', {}, 'أضف التمارين لكل عضلة مع صورها ونصوصها'))));
   });
   const s = db.settings;
   const seg = (key, opts) => h('div', { class: 'seg' }, opts.map(([v, l]) =>
@@ -1035,15 +1046,10 @@ function viewSettings() {
       h('div', { class: 'card settings' },
         h('div', { class: 'set-row' }, h('span', {}, 'وحدة الوزن'), seg('unit', [['kg', 'كجم'], ['lb', 'رطل']])),
         h('div', { class: 'set-row' }, h('span', {}, 'مدة الراحة بين الجولات (ثانية)'), num('rest', 15, 600, 15)),
-        h('div', { class: 'set-row' }, h('div', {}, h('span', {}, 'إظهار الإطالات والتمارين الأولمبية'),
-          h('p', { class: 'muted small' }, 'مخفية افتراضيًا لتقليل الخيارات؛ تظهر دائمًا عند البحث بالاسم.')),
-          seg('showAdvanced', [[true, 'إظهار'], [false, 'إخفاء']])),
         h('div', { class: 'set-row' }, h('span', {}, 'طريقة عرض التمارين'), seg('view', [['grid', 'شبكة'], ['cards', 'بطاقات'], ['list', 'قائمة']])),
         h('div', { class: 'set-row' }, h('span', {}, 'الجولات الافتراضية'), num('defaultSets', 1, 10, 1)),
         h('div', { class: 'set-row' }, h('span', {}, 'التكرارات الافتراضية'), num('defaultReps', 1, 50, 1)),
-        h('div', { class: 'set-row' }, h('div', {}, h('span', {}, 'صور GIF متحركة من الإنترنت'),
-          h('p', { class: 'muted small' }, 'عند تعطيلها أو تعذّرها تُعرض صورتا الحركة بالتناوب.')),
-          seg('gif', [[true, 'تشغيل'], [false, 'إيقاف']]))),
+      ),
       adminEntry,
       h('h2', { class: 'sec' }, 'البيانات'),
       h('div', { class: 'card settings' },
@@ -1051,12 +1057,10 @@ function viewSettings() {
           fmtNum(db.state.plans.length), ' خطة، ', fmtNum(db.state.sessions.length), ' تمرين مسجّل.'),
         h('button', { class: 'btn outline block', onclick: exportData }, 'تصدير نسخة احتياطية (مع صور ناديك)'),
         h('button', { class: 'btn outline block', onclick: () => fileIn.click() }, 'استيراد نسخة احتياطية'), fileIn,
-        h('button', { class: 'btn ghost block', onclick: () => { clearGifCache(); toast('تم مسح ذاكرة الصور'); } }, 'مسح ذاكرة صور GIF'),
         h('button', { class: 'btn ghost danger block', onclick: () => {
           if (confirm('حذف جميع الخطط والسجلات نهائيًا؟')) { db.reset(); setActive(null); setCustom([]); clearPhotos().catch(() => {}); toast('تم الحذف'); viewSettings(); }
         } }, 'حذف جميع البيانات')),
-      h('p', { class: 'muted small center' },
-        'مستودع التمارين: Free Exercise DB (ملكية عامة) — ', fmtNum(876), ' تمرين. صور GIF الاختيارية من ExerciseDB.')));
+      h('p', { class: 'muted small center' }, 'التمارين وصورها تُدار من لوحة تحكم التمارين — ', fmtNum(adminExercises().length), ' تمرين.')));
 
   async function exportData() {
     const data = JSON.parse(db.exportJSON());
@@ -1069,7 +1073,7 @@ function viewSettings() {
 
 
 /* ============ لوحة التحكم (للمالك والمحررين) ============ */
-const adm = { q: '', muscle: '', onlyEdited: false, sel: null };
+const adm = { side: 'front', muscle: 'chest', q: '', sel: null, creating: false, convert: true };
 
 async function viewAdmin() {
   document.body.classList.add('admin-mode');
@@ -1082,152 +1086,236 @@ async function viewAdmin() {
       h('section', { class: 'empty admin-empty' },
         h('h2', {}, access.reason === 'unavailable' ? 'لوحة التحكم غير متاحة هنا' : 'لوحة التحكم للمالك والمحررين فقط'),
         h('p', {}, access.reason === 'unavailable'
-          ? 'تعمل لوحة التحكم داخل رابط التطبيق المنشور على claude.ai، لأنها تحفظ الصور والنصوص في قاعدة بيانات الصفحة.'
+          ? 'تعمل لوحة التحكم داخل رابط التطبيق المنشور على claude.ai، لأنها تحفظ التمارين وصورها في قاعدة بيانات الصفحة.'
           : 'افتح الرابط بحساب مالك التطبيق أو بحساب مُنح صلاحية «محرر».'),
         h('button', { class: 'btn primary', onclick: () => go('#/settings') }, 'العودة للتطبيق'))));
     return;
   }
 
-  const listEl = h('div', { class: 'adm-list' });
+  const mapCol = h('div', { class: 'adm-map card' });
+  const listCol = h('div', { class: 'adm-listcol' });
   const editor = h('div', { class: 'adm-editor' });
-  const usageEl = h('span', { class: 'muted small' });
-  const editedCount = h('b', {});
+  const totalEl = h('b', {});
+  const usageEl = h('span', {});
 
-  const drawList = () => {
-    const edited = new Set(editedIds());
-    editedCount.textContent = fmtNum(edited.size);
-    let items = adm.muscle && !adm.q ? forMuscles([adm.muscle]) : search(adm.q, { muscle: adm.muscle });
-    if (adm.onlyEdited) items = items.filter((e) => edited.has(e.id));
-    const shown = items.slice(0, 150);
-    put(listEl,
-      h('p', { class: 'muted small' }, fmtNum(items.length), ' تمرين', items.length > 150 ? ' — يُعرض أول ١٥٠، استخدم البحث' : ''),
-      shown.map((e) => h('button', { class: 'adm-row' + (adm.sel === e.id ? ' on' : ''), onclick: () => { adm.sel = e.id; drawList(); drawEditor(); } },
-        mediaEl(e, { small: true }),
-        h('span', { class: 'adm-row-names' }, exNames(e)),
-        edited.has(e.id) ? h('span', { class: 'adm-dot', title: 'معدّل' }, '●') : null)));
+  const countFor = (m) => search('', { muscle: m }).length;
+
+  /* ---- خريطة الجسم ---- */
+  const drawMap = () => {
+    const svg = renderBody(adm.side, { selected: new Set(adm.muscle ? [adm.muscle] : []) });
+    svg.querySelectorAll('.muscle').forEach((g) => {
+      const n = countFor(g.dataset.m);
+      if (n) g.classList.add('has-ex');
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      t.textContent = `${mAr(g.dataset.m)} — ${n} تمرين`;
+      g.prepend(t);
+    });
+    svg.addEventListener('click', (ev) => {
+      const g = ev.target.closest('.muscle');
+      if (!g) return;
+      adm.muscle = g.dataset.m; adm.sel = null; adm.creating = false; adm.q = '';
+      drawAll();
+    });
+    const sideNames = MUSCLES_BY_SIDE[adm.side];
+    put(mapCol,
+      h('div', { class: 'adm-map-head' },
+        h('b', {}, 'اختر العضلة'),
+        h('div', { class: 'seg' },
+          h('button', { class: adm.side === 'front' ? 'on' : '', onclick: () => { adm.side = 'front'; drawMap(); } }, 'أمامي'),
+          h('button', { class: adm.side === 'back' ? 'on' : '', onclick: () => { adm.side = 'back'; drawMap(); } }, 'خلفي'))),
+      h('div', { class: 'adm-body' }, svg),
+      h('div', { class: 'chips wrap adm-mchips' },
+        sideNames.map((m) => h('button', { class: 'chip' + (adm.muscle === m ? ' on' : ''),
+          onclick: () => { adm.muscle = m; adm.sel = null; adm.creating = false; drawAll(); } },
+          mAr(m), ' ', h('small', {}, fmtNum(countFor(m)))))),
+      h('p', { class: 'muted small' }, 'العضلات الملوّنة بالأزرق لها تمارين. العضلة المختارة بالأحمر.'));
   };
 
+  /* ---- قائمة تمارين العضلة ---- */
+  let t;
+  const drawList = () => {
+    const items = search(adm.q, { muscle: adm.q ? '' : adm.muscle });
+    const addBtn = h('button', { class: 'btn primary block', onclick: () => { adm.creating = true; adm.sel = null; drawList(); drawEditor(); scrollToEditor(); } },
+      icon('plus'), 'إضافة تمرين لـ', mAr(adm.muscle));
+    put(listCol,
+      h('div', { class: 'adm-list-head' },
+        h('h2', {}, adm.q ? 'نتائج البحث' : mAr(adm.muscle)),
+        h('span', { class: 'muted small' }, fmtNum(items.length), ' تمرين')),
+      h('label', { class: 'search' }, icon('search'),
+        h('input', { type: 'search', placeholder: 'بحث في كل التمارين', value: adm.q,
+          oninput: (ev) => { adm.q = ev.target.value; clearTimeout(t); t = setTimeout(() => { drawList(); listCol.querySelector('input').focus(); }, 250); } })),
+      addBtn,
+      items.length
+        ? h('div', { class: 'adm-list' }, items.map((e) => h('button', { class: 'adm-row' + (adm.sel === e.id ? ' on' : ''),
+            onclick: () => { adm.sel = e.id; adm.creating = false; drawList(); drawEditor(); scrollToEditor(); } },
+            mediaEl(e, { small: true, own: false }),
+            h('span', { class: 'adm-row-names' }, exNames(e),
+              h('small', { class: 'muted' }, e.primary.map(mAr).join('، '), adminImages(e.id).length ? ' · ' + fmtNum(adminImages(e.id).length) + ' وسائط' : ' · بلا صور')))))
+        : h('div', { class: 'empty adm-empty-list' },
+            h('div', { class: 'empty-ic' }, '🏋️'),
+            h('p', {}, adm.q ? 'لا توجد نتائج.' : `لا توجد تمارين لـ«${mAr(adm.muscle)}» بعد.`),
+            adm.q ? null : h('p', { class: 'muted small' }, 'اضغط «إضافة تمرين» أعلاه لإنشاء أول تمرين لهذه العضلة.')));
+  };
+
+  const scrollToEditor = () => { if (window.innerWidth < 1100) editor.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+
+  /* ---- حقول التمرين (مشتركة بين الإنشاء والتعديل) ---- */
+  function fieldsForm(init) {
+    const f = { name: init.name || '', ar: init.ar || '', primary: [...(init.primary || [])], secondary: [...(init.secondary || [])],
+      equipment: init.equipment || 'machine', desc: init.desc || '' };
+    const pri = h('div', { class: 'chips wrap' });
+    const sec = h('div', { class: 'chips wrap' });
+    const drawChips = () => {
+      put(pri, Object.keys(MUSCLE_AR).map((m) => h('button', { type: 'button', class: 'chip' + (f.primary.includes(m) ? ' on' : ''),
+        onclick: () => { f.primary = f.primary.includes(m) ? f.primary.filter((x) => x !== m) : [...f.primary, m]; f.secondary = f.secondary.filter((x) => x !== m); drawChips(); } }, mAr(m))));
+      put(sec, Object.keys(MUSCLE_AR).filter((m) => !f.primary.includes(m)).map((m) => h('button', { type: 'button', class: 'chip sm2' + (f.secondary.includes(m) ? ' on' : ''),
+        onclick: () => { f.secondary = f.secondary.includes(m) ? f.secondary.filter((x) => x !== m) : [...f.secondary, m]; drawChips(); } }, mAr(m))));
+    };
+    drawChips();
+    const inp = (key, attrs) => { const el = h('input', { type: 'text', class: 'adm-input', ...attrs, oninput: (ev) => { f[key] = ev.target.value; } }); el.value = f[key]; return el; };
+    const desc = h('textarea', { class: 'adm-text', rows: 8, placeholder: 'اكتب وصفًا حرًا: طريقة الأداء، النصائح، الأخطاء الشائعة، إعدادات الجهاز…', oninput: (ev) => { f.desc = ev.target.value; } });
+    desc.value = f.desc;
+    const el = h('div', { class: 'adm-fields' },
+      h('div', { class: 'adm-2col' },
+        h('label', { class: 'field' }, h('span', {}, 'اسم التمرين بالعربي *'), inp('ar', { placeholder: 'مثال: سحب الظهر على الجهاز' })),
+        h('label', { class: 'field' }, h('span', {}, 'الاسم بالإنجليزية'), inp('name', { dir: 'ltr', placeholder: 'e.g. Lat Pulldown' }))),
+      h('div', { class: 'field' }, h('span', {}, 'العضلة الأساسية * (يمكن اختيار أكثر من واحدة)'), pri),
+      h('details', { class: 'field', open: f.secondary.length > 0 }, h('summary', {}, 'عضلات مساعدة (اختياري)'), sec),
+      h('label', { class: 'field' }, h('span', {}, 'الأداة'),
+        h('select', { class: 'select', onchange: (ev) => { f.equipment = ev.target.value; } },
+          Object.entries(EQUIPMENT_AR).map(([k, v]) => h('option', { value: k, selected: f.equipment === k }, v)))),
+      h('label', { class: 'field' }, h('span', {}, 'النص التعريفي للتمرين'), desc),
+      h('p', { class: 'muted small' }, 'يظهر النص كما تكتبه (مع الأسطر الجديدة) في صفحة التمرين تحت «عن التمرين».'));
+    const validate = () => {
+      if (!f.ar.trim() && !f.name.trim()) { alert('اكتب اسم التمرين'); return false; }
+      if (!f.primary.length) { alert('اختر العضلة الأساسية'); return false; }
+      return true;
+    };
+    return { el, f, validate };
+  }
+
+  /* ---- محرر التمرين ---- */
   const drawEditor = () => {
+    if (adm.creating) {
+      const form = fieldsForm({ primary: [adm.muscle] });
+      put(editor,
+        h('div', { class: 'adm-head' }, h('h2', {}, 'تمرين جديد'), h('button', { class: 'btn ghost sm', onclick: () => { adm.creating = false; drawEditor(); } }, 'إلغاء')),
+        form.el,
+        h('div', { class: 'row-actions' },
+          h('button', { class: 'btn primary', onclick: async (ev) => {
+            if (!form.validate()) return;
+            ev.currentTarget.disabled = true;
+            try {
+              const id = await createExercise(form.f);
+              adm.sel = id; adm.creating = false;
+              toast('أُنشئ التمرين — أضف صوره الآن');
+            } catch (err) { alert('تعذر الإنشاء: ' + (err.message || err.code)); ev.currentTarget.disabled = false; }
+          } }, 'إنشاء التمرين ثم إضافة الصور')));
+      return;
+    }
     const e = adm.sel && ex(adm.sel);
-    if (!e) { put(editor, h('div', { class: 'adm-placeholder' }, h('div', { class: 'empty-ic' }, '🖼️'), h('p', {}, 'اختر تمرينًا من القائمة لتعديل صوره ونصّه التعريفي.'))); return; }
-    const o = override(e.id) || {};
-    const images = Array.isArray(o.images) ? o.images : [];
-    const descIn = h('textarea', { class: 'adm-text', rows: 9, placeholder: 'اكتب هنا وصفًا حرًا للتمرين: طريقة الأداء، النصائح، الأخطاء الشائعة، إعدادات الجهاز…' });
-    descIn.value = o.desc || '';
-    const arIn = h('input', { type: 'text', class: 'adm-input', placeholder: e.ar || 'الاسم العربي' });
-    arIn.value = o.ar || '';
+    if (!e || e.custom) {
+      put(editor, h('div', { class: 'adm-placeholder' }, h('div', { class: 'empty-ic' }, '👈'),
+        h('p', {}, 'اختر عضلة من الخريطة، ثم اختر تمرينًا من القائمة لتعديله، أو اضغط «إضافة تمرين».')));
+      return;
+    }
+    const media = adminImages(e.id);
+    const form = fieldsForm(e);
     const status = h('span', { class: 'muted small' });
     const fileIn = h('input', { type: 'file', accept: 'image/*,video/*', multiple: true, hidden: true, onchange: () => upload([...fileIn.files]) });
-    const convertBox = h('input', { type: 'checkbox', checked: adm.convert !== false, onchange: (ev) => { adm.convert = ev.target.checked; } });
     const drop = h('div', { class: 'adm-drop', role: 'button', tabindex: '0', onclick: () => fileIn.click(),
       onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); fileIn.click(); } } },
       h('b', {}, '＋ رفع صور أو مقاطع فيديو'), h('span', {}, 'اسحب الملفات هنا أو اضغط للاختيار — JPG / PNG / WebP / GIF متحرك / فيديو MP4 أو MOV'));
     drop.addEventListener('dragover', (ev) => { ev.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (ev) => { ev.preventDefault(); drop.classList.remove('over'); upload([...ev.dataTransfer.files].filter((f) => f.type.startsWith('image/') || f.type.startsWith('video/'))); });
-
     async function upload(files) {
       if (!files.length) return;
       try {
         await addImages(e.id, files, (i, n, label = 'رفع', p = 0) => {
           status.textContent = `${label}: الملف ${fmtNum(i)} من ${fmtNum(n)}` + (p && p < 1 ? ` — ${fmtNum(Math.round(p * 100))}٪` : '…');
-        }, { convertVideo: adm.convert !== false });
+        }, { convertVideo: adm.convert });
         toast('تمت الإضافة');
-      } catch (err) { alert('تعذر رفع الصور: ' + (err.message || err.code)); }
+      } catch (err) { alert('تعذر الرفع: ' + (err.message || err.code)); }
       status.textContent = '';
       refreshUsage();
     }
-    const move = async (i, d) => {
-      const arr = [...images]; const [x] = arr.splice(i, 1); arr.splice(i + d, 0, x);
-      await setImageOrder(e.id, arr);
-    };
+    const ids = media.map((m) => m.id);
+    const move = (i, d) => { const arr = [...ids]; const [x] = arr.splice(i, 1); arr.splice(i + d, 0, x); setImageOrder(e.id, arr); };
 
     put(editor,
       h('div', { class: 'adm-head' },
-        h('div', {}, exNames(e), h('div', { class: 'tags' }, e.primary.map((m) => h('span', { class: 'tag m' }, mAr(m))), h('span', { class: 'tag' }, eqAr(e.equipment)))),
+        h('div', {}, exNames(e)),
         h('a', { class: 'btn ghost sm', href: '#/ex/' + e.id }, 'معاينة في التطبيق')),
 
       h('section', { class: 'adm-sec' },
-        h('h3', {}, 'الصور'),
-        h('p', { class: 'muted small' }, images.length
-          ? 'الصورة الأولى هي الرئيسية في القوائم؛ بقية الصور تظهر معرضًا في صفحة التمرين.'
-          : 'لا توجد صور مرفوعة؛ يعرض التطبيق الصورة الافتراضية:'),
-        images.length ? h('div', { class: 'adm-imgs' }, images.map((id, i) => h('figure', { class: 'adm-img' },
-          isVideoAsset(e.id, id)
-            ? h('video', { src: blobUrl(id), muted: true, loop: true, autoplay: true, playsinline: true })
-            : h('img', { src: blobUrl(id), alt: '' }),
+        h('h3', {}, 'الصور والمقاطع'),
+        h('p', { class: 'muted small' }, media.length
+          ? 'الأولى هي الرئيسية في القوائم؛ البقية تظهر معرضًا في صفحة التمرين.'
+          : 'لا توجد صور بعد — أضف صورة أو مقطعًا للتمرين.'),
+        media.length ? h('div', { class: 'adm-imgs' }, media.map((m, i) => h('figure', { class: 'adm-img' },
+          m.video ? h('video', { src: m.url, muted: true, loop: true, autoplay: true, playsinline: true }) : h('img', { src: m.url, alt: '' }),
           i === 0 ? h('span', { class: 'adm-main' }, 'الرئيسية') : null,
-          isVideoAsset(e.id, id) ? h('span', { class: 'adm-kind' }, 'فيديو') : null,
+          m.video ? h('span', { class: 'adm-kind' }, 'فيديو') : null,
           h('figcaption', {},
             h('button', { class: 'icon-btn sm', 'aria-label': 'تقديم', disabled: i === 0, onclick: () => move(i, -1) }, icon('back')),
-            h('button', { class: 'icon-btn sm flip-x', 'aria-label': 'تأخير', disabled: i === images.length - 1, onclick: () => move(i, 1) }, icon('back')),
-            i !== 0 ? h('button', { class: 'btn ghost sm', onclick: () => setImageOrder(e.id, [id, ...images.filter((x) => x !== id)]) }, 'اجعلها الرئيسية') : null,
+            h('button', { class: 'icon-btn sm flip-x', 'aria-label': 'تأخير', disabled: i === media.length - 1, onclick: () => move(i, 1) }, icon('back')),
+            i !== 0 ? h('button', { class: 'btn ghost sm', onclick: () => setImageOrder(e.id, [m.id, ...ids.filter((x) => x !== m.id)]) }, 'اجعلها الرئيسية') : null,
             h('button', { class: 'icon-btn sm danger', 'aria-label': 'حذف', onclick: async () => {
               if (!confirm('حذف هذه الصورة نهائيًا؟')) return;
-              await removeImage(e.id, id); refreshUsage();
-            } }, icon('trash'))))))
-          : h('div', { class: 'adm-default' }, mediaEl(e, { small: true, own: false })),
+              await removeImage(e.id, m.id); refreshUsage();
+            } }, icon('trash')))))) : null,
         access.assets ? drop : h('p', { class: 'muted small' }, 'رفع الصور غير متاح لهذا الحساب.'),
-        access.assets ? h('label', { class: 'adm-check' }, convertBox,
+        access.assets ? h('label', { class: 'adm-check' },
+          h('input', { type: 'checkbox', checked: adm.convert, onchange: (ev) => { adm.convert = ev.target.checked; } }),
           h('span', {}, h('b', {}, 'تحويل الفيديو إلى صورة GIF متحركة'),
-            h('small', {}, ' — مدة حتى ٨ ثوانٍ بعرض ٤٨٠ بكسل. عند إلغاء التحويل يُرفع الفيديو كما هو (MP4/WebM) ويعمل صامتًا متكررًا مثل GIF بجودة أعلى وحجم أصغر.'))) : null,
+            h('small', {}, ' — حتى ٨ ثوانٍ بعرض ٤٨٠ بكسل. عند إلغاء التحويل يُرفع الفيديو (MP4/WebM) ويعمل صامتًا متكررًا مثل GIF.'))) : null,
         fileIn, status),
 
       h('section', { class: 'adm-sec' },
-        h('h3', {}, 'النص'),
-        h('label', { class: 'field' }, h('span', {}, 'الاسم العربي (اتركه فارغًا لاستخدام الترجمة الافتراضية)'), arIn),
-        h('label', { class: 'field' }, h('span', {}, 'النص التعريفي للتمرين'), descIn),
-        h('p', { class: 'muted small' }, 'يظهر النص كما تكتبه تمامًا (مع الأسطر الجديدة) في صفحة التمرين تحت عنوان «عن التمرين».'),
+        h('h3', {}, 'بيانات التمرين'),
+        form.el,
         h('div', { class: 'row-actions' },
           h('button', { class: 'btn primary', onclick: async (ev) => {
-            ev.target.disabled = true;
-            try { await saveText(e.id, { desc: descIn.value, ar: arIn.value }); toast('حُفظ النص'); }
+            if (!form.validate()) return;
+            const b = ev.currentTarget; b.disabled = true;
+            try { await updateExercise(e.id, form.f); toast('حُفظت التغييرات'); }
             catch (err) { alert('تعذر الحفظ: ' + (err.message || err.code)); }
-            ev.target.disabled = false;
-          } }, 'حفظ النص'),
-          (images.length || o.desc || o.ar) ? h('button', { class: 'btn ghost danger', onclick: async () => {
-            if (!confirm('إعادة هذا التمرين إلى المحتوى الافتراضي؟ ستُحذف صوره ونصّه من لوحة التحكم.')) return;
-            await resetExercise(e.id); toast('أُعيد للافتراضي'); refreshUsage();
-          } }, 'إعادة للافتراضي') : null)));
+            b.disabled = false;
+          } }, 'حفظ التغييرات'),
+          h('button', { class: 'btn ghost danger', onclick: async () => {
+            if (!confirm(`حذف التمرين «${e.ar || e.name}» وكل صوره نهائيًا؟`)) return;
+            await deleteExercise(e.id); adm.sel = null; toast('حُذف التمرين'); refreshUsage();
+          } }, icon('trash'), 'حذف التمرين'))));
   };
+
+  const drawAll = () => { totalEl.textContent = fmtNum(adminExercises().length); drawMap(); drawList(); drawEditor(); };
 
   const refreshUsage = async () => {
     const u = await storageUsage();
-    usageEl.textContent = u ? `التخزين: ${fmtNum(Math.round(u.bytes / 1048576))} من ${fmtNum(Math.round(u.maxBytes / 1048576))} ميجابايت · ${fmtNum(u.files)} صورة` : '';
+    usageEl.textContent = u ? ` · التخزين: ${fmtNum(Math.round(u.bytes / 1048576))} من ${fmtNum(Math.round(u.maxBytes / 1048576))} ميجابايت` : '';
   };
 
-  let t;
   put(v, h('div', { class: 'admin' },
-    adminTop(h('span', { class: 'adm-stats' }, 'تمارين معدّلة: ', editedCount, ' · ', usageEl)),
-    h('div', { class: 'adm-grid' },
-      h('aside', { class: 'adm-side' },
-        h('label', { class: 'search' }, icon('search'),
-          h('input', { type: 'search', placeholder: 'ابحث بالاسم (عربي أو إنجليزي)', value: adm.q,
-            oninput: (ev) => { adm.q = ev.target.value; clearTimeout(t); t = setTimeout(drawList, 200); } })),
-        h('div', { class: 'filter-row' },
-          h('select', { class: 'select', onchange: (ev) => { adm.muscle = ev.target.value; drawList(); } },
-            h('option', { value: '' }, 'كل العضلات'),
-            Object.keys(MUSCLE_AR).map((m) => h('option', { value: m, selected: adm.muscle === m }, mAr(m)))),
-          h('button', { class: 'chip tgl' + (adm.onlyEdited ? ' on' : ''), onclick: (ev) => {
-            adm.onlyEdited = !adm.onlyEdited; ev.currentTarget.classList.toggle('on', adm.onlyEdited); drawList();
-          } }, 'المعدّلة فقط')),
-        listEl),
-      editor)));
-  drawList();
-  drawEditor();
+    adminTop(h('span', { class: 'adm-stats' }, 'عدد التمارين: ', totalEl, usageEl)),
+    h('div', { class: 'adm-grid3' }, mapCol, listCol, editor)));
+  drawAll();
   refreshUsage();
-  // تحديث مباشر عند أي تعديل (من هذا الجهاز أو غيره)
+  // تحديث مباشر عند أي تعديل، دون مسح ما يُكتب الآن
   const off = onContentChange(() => {
     if (!location.hash.startsWith('#/admin')) { off(); return; }
+    totalEl.textContent = fmtNum(adminExercises().length);
+    drawMap();
     const active = document.activeElement;
-    if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) { drawList(); return; }
-    drawList(); drawEditor();
+    const typing = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.tagName === 'SELECT');
+    if (!(typing && listCol.contains(active))) drawList();
+    if (!(typing && editor.contains(active))) drawEditor();
   });
 }
 
 function adminTop(extra = null) {
   return h('header', { class: 'adm-top' },
-    h('div', {}, h('h1', {}, '⚙️ لوحة تحكم المحتوى'), extra),
+    h('div', {}, h('h1', {}, '⚙️ لوحة تحكم التمارين'), extra),
     h('button', { class: 'btn outline sm', onclick: () => go('#/settings') }, 'العودة للتطبيق'));
 }
 
@@ -1285,6 +1373,13 @@ async function boot() {
   try {
     await loadExercises();
     setCustom(db.state.custom || []);
+    // ترحيل لمرة واحدة: حُذف المستودع القديم، فتُزال تماريـنه من الخطط والمفضلة
+    if (!db.settings.libV2) {
+      const keep = (id) => /^(ex_|custom_)/.test(id);
+      db.state.plans.forEach((p) => { p.exercises = p.exercises.filter((x) => keep(x.exId)); });
+      db.state.favorites = (db.state.favorites || []).filter(keep);
+      db.setSetting('libV2', true);
+    }
     await initPhotos();
   } catch {
     put($view(), h('p', { class: 'page center' }, 'تعذر تحميل مستودع التمارين. تحقق من الاتصال ثم أعد التحميل.'));

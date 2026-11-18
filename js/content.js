@@ -1,9 +1,10 @@
-// محتوى لوحة التحكم: صور ونصوص التمارين التي يحررها المالك من لوحة التحكم.
-// تُخزَّن في قاعدة بيانات الصفحة المنشورة (db) والصور في مخزن الأصول (assets)،
-// فتصل إلى كل من يفتح التطبيق. خارج claude.ai يعمل التطبيق بالمحتوى الافتراضي.
+// مستودع التمارين يُدار بالكامل من لوحة التحكم.
+// كل تمرين وثيقة في قاعدة بيانات الصفحة: exercises/<id>
+//   {name, ar, primary[], secondary[], equipment, images[assetId], kinds{assetId:'video'}, desc, createdAt, updatedAt}
+// والصور/المقاطع في مخزن أصول الصفحة. القراءة لكل من يفتح التطبيق، والكتابة للمالك والمحررين.
 
-const COLLECTION = 'content';
-const overrides = new Map(); // exId -> {images: [assetId], desc, ar, updatedAt}
+const COLLECTION = 'exercises';
+const docs = new Map(); // id -> body
 const listeners = new Set();
 
 let dbApi = null;
@@ -14,7 +15,6 @@ let ready = null;
 
 const runtime = () => (typeof window !== 'undefined' && window.claude && typeof window.claude.use === 'function' ? window.claude : null);
 
-/** يبدأ الاتصال ويشترك مرة واحدة في تعديلات المحتوى */
 export function initContent() {
   if (ready) return ready;
   ready = (async () => {
@@ -25,9 +25,10 @@ export function initContent() {
     if (!dbApi) { state = 'unavailable'; emit(); return; }
     const timer = setTimeout(() => { if (state === 'loading') { state = 'offline'; emit(); } }, 10000);
     dbApi.collection(COLLECTION).onSnapshot((snap) => {
-      overrides.clear();
-      snap.docs.forEach((d) => { if (d.exists) overrides.set(d.id, d.data()); });
+      docs.clear();
+      snap.docs.forEach((d) => { if (d.exists) docs.set(d.id, d.data()); });
       if (!snap.metadata.fromCache) { clearTimeout(timer); state = 'live'; }
+      else if (state === 'loading' && snap.size) state = 'live';
       emit();
     }, () => { clearTimeout(timer); state = 'offline'; emit(); });
   })();
@@ -37,19 +38,35 @@ export function initContent() {
 function emit() { listeners.forEach((fn) => { try { fn(state); } catch { /* ignore */ } }); }
 export function onContentChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 export const contentState = () => state;
-
-export const override = (id) => overrides.get(id) || null;
-export const editedIds = () => [...overrides.keys()];
 export const blobUrl = (assetId) => '/_blob/' + assetId;
 
-/** وسائط لوحة التحكم لتمرين: [{id, url, video}] */
-export function adminImages(id) {
-  const o = overrides.get(id);
-  if (!o || !Array.isArray(o.images)) return [];
-  const kinds = o.kinds || {};
-  return o.images.map((a) => ({ id: a, url: blobUrl(a), video: kinds[a] === 'video' }));
+/** كل التمارين بصيغة موحّدة، الأحدث أولًا */
+export function adminExercises() {
+  return [...docs].map(([id, d]) => ({
+    id,
+    name: d.name || d.ar || 'تمرين',
+    ar: d.ar || '',
+    primary: Array.isArray(d.primary) ? d.primary : [],
+    secondary: Array.isArray(d.secondary) ? d.secondary : [],
+    equipment: d.equipment || 'machine',
+    desc: d.desc || '',
+    images: Array.isArray(d.images) ? d.images : [],
+    kinds: d.kinds || {},
+    category: 'strength',
+    level: null,
+    instructions: [],
+    createdAt: d.createdAt || 0,
+  })).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
-export const isVideoAsset = (exId, assetId) => ((overrides.get(exId) || {}).kinds || {})[assetId] === 'video';
+
+/** وسائط تمرين: [{id, url, video}] */
+export function adminImages(id) {
+  const d = docs.get(id);
+  if (!d || !Array.isArray(d.images)) return [];
+  const kinds = d.kinds || {};
+  return d.images.map((a) => ({ id: a, url: blobUrl(a), video: kinds[a] === 'video' }));
+}
+export const isVideoAsset = (exId, assetId) => ((docs.get(exId) || {}).kinds || {})[assetId] === 'video';
 
 /* ===== صلاحيات المدير ===== */
 export async function adminAccess() {
@@ -61,34 +78,57 @@ export async function adminAccess() {
   return { ok: true, assets: !!assetsApi };
 }
 
-/* ===== كتابة المحتوى (للمالك والمحررين) ===== */
+/* ===== الكتابة (كتابة واحدة في كل مرة لكل وثيقة) ===== */
 const writing = new Map();
-async function writeDoc(id, body) {
-  // كتابة واحدة في كل مرة لكل وثيقة
+function writeDoc(id, body) {
   const prev = writing.get(id) || Promise.resolve();
   const next = prev.catch(() => {}).then(() => dbApi.doc(`${COLLECTION}/${id}`).set({ ...body, updatedAt: Date.now() }));
   writing.set(id, next);
   return next;
 }
-
 function current(id) {
-  const o = overrides.get(id) || {};
-  return { images: Array.isArray(o.images) ? [...o.images] : [], kinds: { ...(o.kinds || {}) }, desc: o.desc || '', ar: o.ar || '' };
+  const d = docs.get(id) || {};
+  return {
+    name: d.name || '', ar: d.ar || '', primary: [...(d.primary || [])], secondary: [...(d.secondary || [])],
+    equipment: d.equipment || 'machine', desc: d.desc || '',
+    images: [...(d.images || [])], kinds: { ...(d.kinds || {}) }, createdAt: d.createdAt || Date.now(),
+  };
+}
+const newId = () => 'ex_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+export async function createExercise(fields) {
+  const id = newId();
+  await writeDoc(id, { ...current(id), ...clean(fields), createdAt: Date.now() });
+  return id;
 }
 
-export async function saveText(id, { desc, ar }) {
+export async function updateExercise(id, fields) {
+  return writeDoc(id, { ...current(id), ...clean(fields) });
+}
+
+function clean(f) {
+  const out = {};
+  if ('name' in f) out.name = String(f.name || '').trim();
+  if ('ar' in f) out.ar = String(f.ar || '').trim();
+  if ('desc' in f) out.desc = String(f.desc || '').trim();
+  if ('equipment' in f) out.equipment = f.equipment;
+  if ('primary' in f) out.primary = [...new Set(f.primary)];
+  if ('secondary' in f) out.secondary = [...new Set(f.secondary)].filter((m) => !(f.primary || []).includes(m));
+  return out;
+}
+
+/** يحذف التمرين وكل صوره نهائيًا */
+export async function deleteExercise(id) {
   const c = current(id);
-  const body = { ...c, desc: desc.trim(), ar: ar.trim() };
-  if (!body.images.length && !body.desc && !body.ar) return dbApi.doc(`${COLLECTION}/${id}`).delete();
-  return writeDoc(id, body);
+  await dbApi.doc(`${COLLECTION}/${id}`).delete();
+  for (const a of c.images) { try { await assetsApi.delete(a); } catch { /* ignore */ } }
 }
 
 const VIDEO_OK = ['video/mp4', 'video/webm'];
 
 /**
  * يرفع صورًا أو مقاطع فيديو ويضيفها لتمرين.
- * - GIF يُرفع كما هو ليبقى متحركًا، والصور الكبيرة تُصغَّر.
- * - الفيديو: يُحوَّل إلى GIF متحرك (convertVideo) أو يُرفع فيديو صامتًا متكررًا.
+ * GIF يُرفع كما هو، والصور الكبيرة تُصغَّر، والفيديو يُحوَّل إلى GIF (convertVideo) أو يُرفع كما هو.
  * onProgress(i, n, label, fraction)
  */
 export async function addImages(id, files, onProgress, { convertVideo = true } = {}) {
@@ -124,24 +164,14 @@ export async function addImages(id, files, onProgress, { convertVideo = true } =
 }
 
 export async function setImageOrder(id, images) {
-  const c = current(id);
-  return writeDoc(id, { ...c, images });
+  return writeDoc(id, { ...current(id), images });
 }
 
 export async function removeImage(id, assetId) {
   const c = current(id);
-  const images = c.images.filter((x) => x !== assetId);
   const kinds = { ...c.kinds }; delete kinds[assetId];
-  if (!images.length && !c.desc && !c.ar) await dbApi.doc(`${COLLECTION}/${id}`).delete();
-  else await writeDoc(id, { ...c, images, kinds });
-  try { await assetsApi.delete(assetId); } catch { /* الصورة غير موجودة أصلًا */ }
-}
-
-/** يعيد التمرين إلى المحتوى الافتراضي (يحذف صوره ونصوصه من اللوحة) */
-export async function resetExercise(id) {
-  const c = current(id);
-  await dbApi.doc(`${COLLECTION}/${id}`).delete();
-  for (const a of c.images) { try { await assetsApi.delete(a); } catch { /* ignore */ } }
+  await writeDoc(id, { ...c, images: c.images.filter((x) => x !== assetId), kinds });
+  try { await assetsApi.delete(assetId); } catch { /* ignore */ }
 }
 
 export async function storageUsage() {

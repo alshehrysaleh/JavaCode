@@ -551,3 +551,30 @@ body.admin-mode .tabs, body.admin-mode #live { display: none; }
 .gal-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gal-thumb.is-video::after { content: '▶'; position: absolute; font-size: 12px; color: #fff; background: rgba(0,0,0,.55); border-radius: 50%; width: 20px; height: 20px; display: grid; place-items: center; }
 .gal-thumb { position: relative; display: grid; place-items: center; }
+
+/* ===== لوحة التحكم: خريطة الجسم + القائمة + المحرر ===== */
+.adm-grid3 { display: grid; grid-template-columns: 300px 330px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .adm-grid3 { grid-template-columns: 300px 1fr; } .adm-grid3 .adm-editor { grid-column: 1 / -1; } }
+@media (max-width: 700px) { .adm-grid3 { grid-template-columns: 1fr; } }
+.adm-map { display: flex; flex-direction: column; gap: 10px; position: sticky; top: 12px; }
+@media (max-width: 700px) { .adm-map { position: static; } }
+.adm-map-head { display: flex; justify-content: space-between; align-items: center; }
+.adm-body { display: grid; place-items: center; }
+.adm-body .body-svg { width: 100%; max-width: 240px; max-height: 480px; }
+.muscle.has-ex path { fill: color-mix(in srgb, var(--brand) 28%, var(--muscle)); }
+.muscle.has-ex.selected path, .muscle.selected path { fill: var(--accent); }
+.adm-mchips .chip { min-height: 30px; padding: 3px 10px; font-size: 13px; }
+.adm-mchips .chip small { opacity: .7; margin-inline-start: 2px; }
+.adm-listcol { display: flex; flex-direction: column; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 14px; }
+.adm-list-head { display: flex; justify-content: space-between; align-items: baseline; }
+.adm-list-head h2 { font-size: 19px; }
+.adm-listcol .adm-list { max-height: 60dvh; overflow-y: auto; }
+.adm-row-names small { display: block; font-size: 11.5px; margin-top: 2px; }
+.adm-empty-list { padding: 18px 8px; }
+.adm-fields { display: flex; flex-direction: column; gap: 12px; }
+.adm-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 560px) { .adm-2col { grid-template-columns: 1fr; } }
+.adm-fields .field > span, .adm-fields .field > summary { font-weight: 600; }
+.chip.sm2 { min-height: 30px; padding: 3px 10px; font-size: 13px; }
+.adm-head h2 { font-size: 20px; }
+.media.noimg::after { content: '🏋️'; }
