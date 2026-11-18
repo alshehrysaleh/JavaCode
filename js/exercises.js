@@ -142,22 +142,45 @@ export function mediaEl(e, { small = false, own = true } = {}) {
   const admin = own ? adminImages(e.id) : [];
   if (admin.length) {
     wrap.classList.add('admin');
-    img.src = admin[0];
+    // عرض عنصر (صورة/GIF أو فيديو صامت متكرر يعمل مثل GIF)
+    let vid = null;
+    const show = (m) => {
+      if (m.video) {
+        img.style.display = 'none';
+        if (!vid) {
+          vid = document.createElement('video');
+          vid.muted = true; vid.loop = true; vid.playsInline = true;
+          vid.setAttribute('muted', ''); vid.setAttribute('playsinline', '');
+          vid.preload = small ? 'metadata' : 'auto';
+          vid.autoplay = !small;
+          vid.onloadeddata = () => wrap.classList.remove('loading');
+          wrap.insertBefore(vid, img);
+        }
+        vid.src = small ? m.url + '#t=0.1' : m.url;
+        if (!small) vid.play().catch(() => {});
+      } else {
+        if (vid) { vid.pause(); vid.remove(); vid = null; }
+        img.style.display = '';
+        img.src = m.url;
+      }
+    };
+    show(admin[0]);
     if (small || admin.length === 1) return wrap;
     const gal = document.createElement('div');
     gal.className = 'gallery';
     const thumbs = document.createElement('div');
     thumbs.className = 'gal-thumbs';
-    admin.forEach((u, i) => {
+    admin.forEach((m, i) => {
       const b = document.createElement('button');
-      b.className = 'gal-thumb' + (i === 0 ? ' on' : '');
-      b.setAttribute('aria-label', `صورة ${i + 1}`);
-      const t = document.createElement('img');
-      t.src = u; t.alt = '';
+      b.className = 'gal-thumb' + (i === 0 ? ' on' : '') + (m.video ? ' is-video' : '');
+      b.setAttribute('aria-label', `${m.video ? 'فيديو' : 'صورة'} ${i + 1}`);
+      let t;
+      if (m.video) { t = document.createElement('video'); t.muted = true; t.preload = 'metadata'; t.src = m.url + '#t=0.1'; }
+      else { t = document.createElement('img'); t.src = m.url; t.alt = ''; }
       b.appendChild(t);
       b.onclick = (ev) => {
         ev.stopPropagation();
-        img.src = u;
+        show(m);
         thumbs.querySelectorAll('.gal-thumb').forEach((x) => x.classList.toggle('on', x === b));
       };
       thumbs.appendChild(b);

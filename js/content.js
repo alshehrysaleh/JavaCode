@@ -42,11 +42,14 @@ export const override = (id) => overrides.get(id) || null;
 export const editedIds = () => [...overrides.keys()];
 export const blobUrl = (assetId) => '/_blob/' + assetId;
 
-/** صور لوحة التحكم لتمرين (روابط عرض) */
+/** وسائط لوحة التحكم لتمرين: [{id, url, video}] */
 export function adminImages(id) {
   const o = overrides.get(id);
-  return o && Array.isArray(o.images) ? o.images.map(blobUrl) : [];
+  if (!o || !Array.isArray(o.images)) return [];
+  const kinds = o.kinds || {};
+  return o.images.map((a) => ({ id: a, url: blobUrl(a), video: kinds[a] === 'video' }));
 }
+export const isVideoAsset = (exId, assetId) => ((overrides.get(exId) || {}).kinds || {})[assetId] === 'video';
 
 /* ===== صلاحيات المدير ===== */
 export async function adminAccess() {
@@ -70,7 +73,7 @@ async function writeDoc(id, body) {
 
 function current(id) {
   const o = overrides.get(id) || {};
-  return { images: Array.isArray(o.images) ? [...o.images] : [], desc: o.desc || '', ar: o.ar || '' };
+  return { images: Array.isArray(o.images) ? [...o.images] : [], kinds: { ...(o.kinds || {}) }, desc: o.desc || '', ar: o.ar || '' };
 }
 
 export async function saveText(id, { desc, ar }) {
@@ -80,20 +83,44 @@ export async function saveText(id, { desc, ar }) {
   return writeDoc(id, body);
 }
 
-/** يرفع صورًا ويضيفها لتمرين. صور GIF تُرفع كما هي لتبقى متحركة. */
-export async function addImages(id, files, onProgress) {
+const VIDEO_OK = ['video/mp4', 'video/webm'];
+
+/**
+ * يرفع صورًا أو مقاطع فيديو ويضيفها لتمرين.
+ * - GIF يُرفع كما هو ليبقى متحركًا، والصور الكبيرة تُصغَّر.
+ * - الفيديو: يُحوَّل إلى GIF متحرك (convertVideo) أو يُرفع فيديو صامتًا متكررًا.
+ * onProgress(i, n, label, fraction)
+ */
+export async function addImages(id, files, onProgress, { convertVideo = true } = {}) {
   if (!assetsApi) throw new Error('رفع الصور متاح للمالك والمحررين فقط');
-  const ids = [];
+  const added = [];
+  const kinds = {};
   let i = 0;
   for (const f of files) {
-    onProgress && onProgress(++i, files.length);
-    const blob = f.type === 'image/gif' || f.type === 'image/svg+xml' ? f : await shrink(f, 1400, 0.85);
+    i++;
+    const isVideo = f.type.startsWith('video/') || /\.(mp4|mov|m4v|webm)$/i.test(f.name || '');
+    let blob = f;
+    let kind = 'image';
+    if (isVideo && convertVideo) {
+      const { videoToGif } = await import('./video2gif.js');
+      blob = await videoToGif(f, { onProgress: (p) => onProgress && onProgress(i, files.length, 'تحويل إلى GIF', p) });
+      if (blob.size > 20 * 1048576) {
+        blob = await videoToGif(f, { maxWidth: 360, fps: 8, onProgress: (p) => onProgress && onProgress(i, files.length, 'ضغط GIF', p) });
+      }
+    } else if (isVideo) {
+      if (!VIDEO_OK.includes(f.type)) throw new Error(`صيغة الفيديو «${f.name}» غير مدعومة للرفع المباشر؛ فعّل «تحويل الفيديو إلى GIF» أو استخدم MP4/WebM`);
+      kind = 'video';
+    } else if (f.type !== 'image/gif' && f.type !== 'image/svg+xml') {
+      blob = await shrink(f, 1400, 0.85);
+    }
+    onProgress && onProgress(i, files.length, 'رفع', 1);
     const r = await assetsApi.upload(blob, blob.type ? undefined : { type: 'image/jpeg' });
-    ids.push(r.id);
+    added.push(r.id);
+    if (kind === 'video') kinds[r.id] = 'video';
   }
   const c = current(id);
-  await writeDoc(id, { ...c, images: [...c.images, ...ids] });
-  return ids;
+  await writeDoc(id, { ...c, images: [...c.images, ...added], kinds: { ...c.kinds, ...kinds } });
+  return added;
 }
 
 export async function setImageOrder(id, images) {
@@ -104,8 +131,9 @@ export async function setImageOrder(id, images) {
 export async function removeImage(id, assetId) {
   const c = current(id);
   const images = c.images.filter((x) => x !== assetId);
+  const kinds = { ...c.kinds }; delete kinds[assetId];
   if (!images.length && !c.desc && !c.ar) await dbApi.doc(`${COLLECTION}/${id}`).delete();
-  else await writeDoc(id, { ...c, images });
+  else await writeDoc(id, { ...c, images, kinds });
   try { await assetsApi.delete(assetId); } catch { /* الصورة غير موجودة أصلًا */ }
 }
 

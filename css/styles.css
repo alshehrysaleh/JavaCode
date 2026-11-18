@@ -541,3 +541,13 @@ body.admin-mode .tabs, body.admin-mode #live { display: none; }
 .media > img { position: absolute; inset: 0; width: 100%; height: 100%; }
 .gallery, .gallery > .media, .ex-detail > .media, .movement .media { width: 100%; }
 .gallery > .media, .ex-detail > .media, .movement .media { height: auto; flex: none; }
+.adm-img video { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; display: block; background: #fff; }
+.adm-kind { position: absolute; top: 6px; inset-inline-end: 6px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; border-radius: 999px; padding: 2px 8px; }
+.adm-check { display: flex; gap: 10px; align-items: flex-start; background: var(--bg); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.adm-check input { width: 20px; height: 20px; margin-top: 3px; flex: none; }
+.adm-check small { color: var(--muted); }
+.media > video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #fff; }
+.ex-grid .media > video, .ex-list .media > video, .adm-row .media > video { object-fit: cover; }
+.gal-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gal-thumb.is-video::after { content: '▶'; position: absolute; font-size: 12px; color: #fff; background: rgba(0,0,0,.55); border-radius: 50%; width: 20px; height: 20px; display: grid; place-items: center; }
+.gal-thumb { position: relative; display: grid; place-items: center; }

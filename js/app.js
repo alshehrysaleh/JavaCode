@@ -2,7 +2,7 @@ import { renderBody, MUSCLES_BY_SIDE } from './bodymap.js';
 import { db, uid, dateKey } from './store.js';
 import { MUSCLE_AR, EQUIPMENT_AR, LEVEL_AR, CATEGORY_AR, mAr, eqAr } from './labels.js';
 import { loadExercises, ex, forMuscles, search, mediaEl, clearGifCache, setCustom } from './exercises.js';
-import { initContent, onContentChange, contentState, override, editedIds, blobUrl, adminAccess, saveText, addImages, setImageOrder, removeImage, resetExercise, storageUsage } from './content.js';
+import { initContent, onContentChange, contentState, override, editedIds, blobUrl, isVideoAsset, adminAccess, saveText, addImages, setImageOrder, removeImage, resetExercise, storageUsage } from './content.js';
 import { initPhotos, hasPhoto, savePhoto, deletePhoto, exportPhotos, importPhotos, clearPhotos } from './photos.js';
 
 /* ============ أدوات DOM ============ */
@@ -1117,19 +1117,22 @@ async function viewAdmin() {
     const arIn = h('input', { type: 'text', class: 'adm-input', placeholder: e.ar || 'الاسم العربي' });
     arIn.value = o.ar || '';
     const status = h('span', { class: 'muted small' });
-    const fileIn = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true, onchange: () => upload([...fileIn.files]) });
+    const fileIn = h('input', { type: 'file', accept: 'image/*,video/*', multiple: true, hidden: true, onchange: () => upload([...fileIn.files]) });
+    const convertBox = h('input', { type: 'checkbox', checked: adm.convert !== false, onchange: (ev) => { adm.convert = ev.target.checked; } });
     const drop = h('div', { class: 'adm-drop', role: 'button', tabindex: '0', onclick: () => fileIn.click(),
       onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); fileIn.click(); } } },
-      h('b', {}, '＋ رفع صور'), h('span', {}, 'اسحب الصور هنا أو اضغط للاختيار — JPG / PNG / WebP / GIF متحرك'));
+      h('b', {}, '＋ رفع صور أو مقاطع فيديو'), h('span', {}, 'اسحب الملفات هنا أو اضغط للاختيار — JPG / PNG / WebP / GIF متحرك / فيديو MP4 أو MOV'));
     drop.addEventListener('dragover', (ev) => { ev.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-    drop.addEventListener('drop', (ev) => { ev.preventDefault(); drop.classList.remove('over'); upload([...ev.dataTransfer.files].filter((f) => f.type.startsWith('image/'))); });
+    drop.addEventListener('drop', (ev) => { ev.preventDefault(); drop.classList.remove('over'); upload([...ev.dataTransfer.files].filter((f) => f.type.startsWith('image/') || f.type.startsWith('video/'))); });
 
     async function upload(files) {
       if (!files.length) return;
       try {
-        await addImages(e.id, files, (i, n) => { status.textContent = `جارٍ رفع ${fmtNum(i)} من ${fmtNum(n)}…`; });
-        toast('تم رفع الصور');
+        await addImages(e.id, files, (i, n, label = 'رفع', p = 0) => {
+          status.textContent = `${label}: الملف ${fmtNum(i)} من ${fmtNum(n)}` + (p && p < 1 ? ` — ${fmtNum(Math.round(p * 100))}٪` : '…');
+        }, { convertVideo: adm.convert !== false });
+        toast('تمت الإضافة');
       } catch (err) { alert('تعذر رفع الصور: ' + (err.message || err.code)); }
       status.textContent = '';
       refreshUsage();
@@ -1150,8 +1153,11 @@ async function viewAdmin() {
           ? 'الصورة الأولى هي الرئيسية في القوائم؛ بقية الصور تظهر معرضًا في صفحة التمرين.'
           : 'لا توجد صور مرفوعة؛ يعرض التطبيق الصورة الافتراضية:'),
         images.length ? h('div', { class: 'adm-imgs' }, images.map((id, i) => h('figure', { class: 'adm-img' },
-          h('img', { src: blobUrl(id), alt: '' }),
+          isVideoAsset(e.id, id)
+            ? h('video', { src: blobUrl(id), muted: true, loop: true, autoplay: true, playsinline: true })
+            : h('img', { src: blobUrl(id), alt: '' }),
           i === 0 ? h('span', { class: 'adm-main' }, 'الرئيسية') : null,
+          isVideoAsset(e.id, id) ? h('span', { class: 'adm-kind' }, 'فيديو') : null,
           h('figcaption', {},
             h('button', { class: 'icon-btn sm', 'aria-label': 'تقديم', disabled: i === 0, onclick: () => move(i, -1) }, icon('back')),
             h('button', { class: 'icon-btn sm flip-x', 'aria-label': 'تأخير', disabled: i === images.length - 1, onclick: () => move(i, 1) }, icon('back')),
@@ -1162,6 +1168,9 @@ async function viewAdmin() {
             } }, icon('trash'))))))
           : h('div', { class: 'adm-default' }, mediaEl(e, { small: true, own: false })),
         access.assets ? drop : h('p', { class: 'muted small' }, 'رفع الصور غير متاح لهذا الحساب.'),
+        access.assets ? h('label', { class: 'adm-check' }, convertBox,
+          h('span', {}, h('b', {}, 'تحويل الفيديو إلى صورة GIF متحركة'),
+            h('small', {}, ' — مدة حتى ٨ ثوانٍ بعرض ٤٨٠ بكسل. عند إلغاء التحويل يُرفع الفيديو كما هو (MP4/WebM) ويعمل صامتًا متكررًا مثل GIF بجودة أعلى وحجم أصغر.'))) : null,
         fileIn, status),
 
       h('section', { class: 'adm-sec' },
