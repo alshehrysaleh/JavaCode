@@ -1,6 +1,7 @@
 // مستودع التمارين: تحميل قاعدة البيانات + الوسائط المتحركة
 import { db } from './store.js';
 import { hasPhoto, photoUrl } from './photos.js';
+import { adminImages } from './content.js';
 
 const IMG_BASE = 'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/';
 // مصدر GIF اختياري (ExerciseDB). يُجلب من جهاز المستخدم عند الطلب، ويُرجع للصور عند الفشل.
@@ -136,6 +137,33 @@ export function mediaEl(e, { small = false, own = true } = {}) {
     badge.textContent = '📷 ناديك';
     wrap.appendChild(badge);
     return wrap;
+  }
+  // صور لوحة التحكم تأتي بعد صورة الجهاز الشخصية وقبل الصور الافتراضية
+  const admin = own ? adminImages(e.id) : [];
+  if (admin.length) {
+    wrap.classList.add('admin');
+    img.src = admin[0];
+    if (small || admin.length === 1) return wrap;
+    const gal = document.createElement('div');
+    gal.className = 'gallery';
+    const thumbs = document.createElement('div');
+    thumbs.className = 'gal-thumbs';
+    admin.forEach((u, i) => {
+      const b = document.createElement('button');
+      b.className = 'gal-thumb' + (i === 0 ? ' on' : '');
+      b.setAttribute('aria-label', `صورة ${i + 1}`);
+      const t = document.createElement('img');
+      t.src = u; t.alt = '';
+      b.appendChild(t);
+      b.onclick = (ev) => {
+        ev.stopPropagation();
+        img.src = u;
+        thumbs.querySelectorAll('.gal-thumb').forEach((x) => x.classList.toggle('on', x === b));
+      };
+      thumbs.appendChild(b);
+    });
+    gal.append(wrap, thumbs);
+    return gal;
   }
   if (e.custom) { wrap.classList.remove('loading'); wrap.classList.add('noimg'); return wrap; }
 

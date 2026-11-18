@@ -58,7 +58,7 @@ export async function deletePhoto(id) {
   if (urls.has(id)) { URL.revokeObjectURL(urls.get(id)); urls.delete(id); }
 }
 
-function resize(file, max, quality) {
+export function resize(file, max, quality) {
   return new Promise((resolve, reject) => {
     const src = URL.createObjectURL(file);
     const img = new Image();

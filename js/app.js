@@ -2,6 +2,7 @@ import { renderBody, MUSCLES_BY_SIDE } from './bodymap.js';
 import { db, uid, dateKey } from './store.js';
 import { MUSCLE_AR, EQUIPMENT_AR, LEVEL_AR, CATEGORY_AR, mAr, eqAr } from './labels.js';
 import { loadExercises, ex, forMuscles, search, mediaEl, clearGifCache, setCustom } from './exercises.js';
+import { initContent, onContentChange, contentState, override, editedIds, blobUrl, adminAccess, saveText, addImages, setImageOrder, removeImage, resetExercise, storageUsage } from './content.js';
 import { initPhotos, hasPhoto, savePhoto, deletePhoto, exportPhotos, importPhotos, clearPhotos } from './photos.js';
 
 /* ============ أدوات DOM ============ */
@@ -186,7 +187,7 @@ function planCard(p) {
 function exNames(e, { tag = 'div', num = null } = {}) {
   return h(tag, { class: 'names' },
     h('div', { class: 'en', dir: 'ltr' }, num != null ? fmtNum(num) + '. ' : '', e.name),
-    e.ar ? h('div', { class: 'ar' }, e.ar) : null);
+    (override(e.id)?.ar || e.ar) ? h('div', { class: 'ar' }, override(e.id)?.ar || e.ar) : null);
 }
 
 /* ===== تفضيلات العرض: المفضلة أولًا، الأجهزة فقط، إخفاء التمارين المتقدمة ===== */
@@ -513,6 +514,7 @@ function exerciseDetailParts(e, redraw) {
       e.level && h('span', { class: 'tag' }, LEVEL_AR[e.level] || e.level),
       e.category && h('span', { class: 'tag' }, CATEGORY_AR[e.category] || e.category)),
     favButton(e),
+    override(e.id)?.desc ? h('section', { class: 'about' }, h('h3', { class: 'sec' }, 'عن التمرين'), h('div', { class: 'about-text' }, override(e.id).desc)) : null,
     e.custom && e.note ? h('p', { class: 'note' }, e.note) : null,
     e.instructions.length ? h('h3', { class: 'sec' }, 'طريقة الأداء') : null,
     e.instructions.length ? h('ol', { class: 'steps', dir: 'ltr' }, e.instructions.map((s) => h('li', {}, s))) : null,
@@ -1001,6 +1003,14 @@ function sessionCard(s) {
 
 /* ============ تبويب الإعدادات ============ */
 function viewSettings() {
+  // مدخل لوحة التحكم: يظهر للمالك والمحررين فقط
+  const adminEntry = h('div');
+  adminAccess().then((a) => {
+    if (!a.ok) return;
+    put(adminEntry, h('button', { class: 'gym-cta', onclick: () => go('#/admin') },
+      h('span', { class: 'gym-cta-ic' }, '⚙️'),
+      h('span', {}, h('b', {}, 'لوحة تحكم المحتوى'), h('small', {}, 'غيّر صور التمارين وأضف صورًا، وحرّر نصوصها التعريفية'))));
+  });
   const s = db.settings;
   const seg = (key, opts) => h('div', { class: 'seg' }, opts.map(([v, l]) =>
     h('button', { class: s[key] === v ? 'on' : '', onclick: () => { db.setSetting(key, v); viewSettings(); } }, l)));
@@ -1034,6 +1044,7 @@ function viewSettings() {
         h('div', { class: 'set-row' }, h('div', {}, h('span', {}, 'صور GIF متحركة من الإنترنت'),
           h('p', { class: 'muted small' }, 'عند تعطيلها أو تعذّرها تُعرض صورتا الحركة بالتناوب.')),
           seg('gif', [[true, 'تشغيل'], [false, 'إيقاف']]))),
+      adminEntry,
       h('h2', { class: 'sec' }, 'البيانات'),
       h('div', { class: 'card settings' },
         h('p', { class: 'muted small' }, 'بياناتك محفوظة على هذا الجهاز فقط: ',
@@ -1054,6 +1065,161 @@ function viewSettings() {
     const a = h('a', { href: URL.createObjectURL(blob), download: `gym-backup-${dateKey()}.json` });
     document.body.append(a); a.click(); a.remove();
   }
+}
+
+
+/* ============ لوحة التحكم (للمالك والمحررين) ============ */
+const adm = { q: '', muscle: '', onlyEdited: false, sel: null };
+
+async function viewAdmin() {
+  document.body.classList.add('admin-mode');
+  const v = $view();
+  put(v, h('div', { class: 'admin' }, adminTop(), h('p', { class: 'muted center page' }, 'جارٍ التحقق من الصلاحيات…')));
+  const access = await adminAccess();
+  if (!location.hash.startsWith('#/admin')) return;
+  if (!access.ok) {
+    put(v, h('div', { class: 'admin' }, adminTop(),
+      h('section', { class: 'empty admin-empty' },
+        h('h2', {}, access.reason === 'unavailable' ? 'لوحة التحكم غير متاحة هنا' : 'لوحة التحكم للمالك والمحررين فقط'),
+        h('p', {}, access.reason === 'unavailable'
+          ? 'تعمل لوحة التحكم داخل رابط التطبيق المنشور على claude.ai، لأنها تحفظ الصور والنصوص في قاعدة بيانات الصفحة.'
+          : 'افتح الرابط بحساب مالك التطبيق أو بحساب مُنح صلاحية «محرر».'),
+        h('button', { class: 'btn primary', onclick: () => go('#/settings') }, 'العودة للتطبيق'))));
+    return;
+  }
+
+  const listEl = h('div', { class: 'adm-list' });
+  const editor = h('div', { class: 'adm-editor' });
+  const usageEl = h('span', { class: 'muted small' });
+  const editedCount = h('b', {});
+
+  const drawList = () => {
+    const edited = new Set(editedIds());
+    editedCount.textContent = fmtNum(edited.size);
+    let items = adm.muscle && !adm.q ? forMuscles([adm.muscle]) : search(adm.q, { muscle: adm.muscle });
+    if (adm.onlyEdited) items = items.filter((e) => edited.has(e.id));
+    const shown = items.slice(0, 150);
+    put(listEl,
+      h('p', { class: 'muted small' }, fmtNum(items.length), ' تمرين', items.length > 150 ? ' — يُعرض أول ١٥٠، استخدم البحث' : ''),
+      shown.map((e) => h('button', { class: 'adm-row' + (adm.sel === e.id ? ' on' : ''), onclick: () => { adm.sel = e.id; drawList(); drawEditor(); } },
+        mediaEl(e, { small: true }),
+        h('span', { class: 'adm-row-names' }, exNames(e)),
+        edited.has(e.id) ? h('span', { class: 'adm-dot', title: 'معدّل' }, '●') : null)));
+  };
+
+  const drawEditor = () => {
+    const e = adm.sel && ex(adm.sel);
+    if (!e) { put(editor, h('div', { class: 'adm-placeholder' }, h('div', { class: 'empty-ic' }, '🖼️'), h('p', {}, 'اختر تمرينًا من القائمة لتعديل صوره ونصّه التعريفي.'))); return; }
+    const o = override(e.id) || {};
+    const images = Array.isArray(o.images) ? o.images : [];
+    const descIn = h('textarea', { class: 'adm-text', rows: 9, placeholder: 'اكتب هنا وصفًا حرًا للتمرين: طريقة الأداء، النصائح، الأخطاء الشائعة، إعدادات الجهاز…' });
+    descIn.value = o.desc || '';
+    const arIn = h('input', { type: 'text', class: 'adm-input', placeholder: e.ar || 'الاسم العربي' });
+    arIn.value = o.ar || '';
+    const status = h('span', { class: 'muted small' });
+    const fileIn = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true, onchange: () => upload([...fileIn.files]) });
+    const drop = h('div', { class: 'adm-drop', role: 'button', tabindex: '0', onclick: () => fileIn.click(),
+      onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); fileIn.click(); } } },
+      h('b', {}, '＋ رفع صور'), h('span', {}, 'اسحب الصور هنا أو اضغط للاختيار — JPG / PNG / WebP / GIF متحرك'));
+    drop.addEventListener('dragover', (ev) => { ev.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (ev) => { ev.preventDefault(); drop.classList.remove('over'); upload([...ev.dataTransfer.files].filter((f) => f.type.startsWith('image/'))); });
+
+    async function upload(files) {
+      if (!files.length) return;
+      try {
+        await addImages(e.id, files, (i, n) => { status.textContent = `جارٍ رفع ${fmtNum(i)} من ${fmtNum(n)}…`; });
+        toast('تم رفع الصور');
+      } catch (err) { alert('تعذر رفع الصور: ' + (err.message || err.code)); }
+      status.textContent = '';
+      refreshUsage();
+    }
+    const move = async (i, d) => {
+      const arr = [...images]; const [x] = arr.splice(i, 1); arr.splice(i + d, 0, x);
+      await setImageOrder(e.id, arr);
+    };
+
+    put(editor,
+      h('div', { class: 'adm-head' },
+        h('div', {}, exNames(e), h('div', { class: 'tags' }, e.primary.map((m) => h('span', { class: 'tag m' }, mAr(m))), h('span', { class: 'tag' }, eqAr(e.equipment)))),
+        h('a', { class: 'btn ghost sm', href: '#/ex/' + e.id }, 'معاينة في التطبيق')),
+
+      h('section', { class: 'adm-sec' },
+        h('h3', {}, 'الصور'),
+        h('p', { class: 'muted small' }, images.length
+          ? 'الصورة الأولى هي الرئيسية في القوائم؛ بقية الصور تظهر معرضًا في صفحة التمرين.'
+          : 'لا توجد صور مرفوعة؛ يعرض التطبيق الصورة الافتراضية:'),
+        images.length ? h('div', { class: 'adm-imgs' }, images.map((id, i) => h('figure', { class: 'adm-img' },
+          h('img', { src: blobUrl(id), alt: '' }),
+          i === 0 ? h('span', { class: 'adm-main' }, 'الرئيسية') : null,
+          h('figcaption', {},
+            h('button', { class: 'icon-btn sm', 'aria-label': 'تقديم', disabled: i === 0, onclick: () => move(i, -1) }, icon('back')),
+            h('button', { class: 'icon-btn sm flip-x', 'aria-label': 'تأخير', disabled: i === images.length - 1, onclick: () => move(i, 1) }, icon('back')),
+            i !== 0 ? h('button', { class: 'btn ghost sm', onclick: () => setImageOrder(e.id, [id, ...images.filter((x) => x !== id)]) }, 'اجعلها الرئيسية') : null,
+            h('button', { class: 'icon-btn sm danger', 'aria-label': 'حذف', onclick: async () => {
+              if (!confirm('حذف هذه الصورة نهائيًا؟')) return;
+              await removeImage(e.id, id); refreshUsage();
+            } }, icon('trash'))))))
+          : h('div', { class: 'adm-default' }, mediaEl(e, { small: true, own: false })),
+        access.assets ? drop : h('p', { class: 'muted small' }, 'رفع الصور غير متاح لهذا الحساب.'),
+        fileIn, status),
+
+      h('section', { class: 'adm-sec' },
+        h('h3', {}, 'النص'),
+        h('label', { class: 'field' }, h('span', {}, 'الاسم العربي (اتركه فارغًا لاستخدام الترجمة الافتراضية)'), arIn),
+        h('label', { class: 'field' }, h('span', {}, 'النص التعريفي للتمرين'), descIn),
+        h('p', { class: 'muted small' }, 'يظهر النص كما تكتبه تمامًا (مع الأسطر الجديدة) في صفحة التمرين تحت عنوان «عن التمرين».'),
+        h('div', { class: 'row-actions' },
+          h('button', { class: 'btn primary', onclick: async (ev) => {
+            ev.target.disabled = true;
+            try { await saveText(e.id, { desc: descIn.value, ar: arIn.value }); toast('حُفظ النص'); }
+            catch (err) { alert('تعذر الحفظ: ' + (err.message || err.code)); }
+            ev.target.disabled = false;
+          } }, 'حفظ النص'),
+          (images.length || o.desc || o.ar) ? h('button', { class: 'btn ghost danger', onclick: async () => {
+            if (!confirm('إعادة هذا التمرين إلى المحتوى الافتراضي؟ ستُحذف صوره ونصّه من لوحة التحكم.')) return;
+            await resetExercise(e.id); toast('أُعيد للافتراضي'); refreshUsage();
+          } }, 'إعادة للافتراضي') : null)));
+  };
+
+  const refreshUsage = async () => {
+    const u = await storageUsage();
+    usageEl.textContent = u ? `التخزين: ${fmtNum(Math.round(u.bytes / 1048576))} من ${fmtNum(Math.round(u.maxBytes / 1048576))} ميجابايت · ${fmtNum(u.files)} صورة` : '';
+  };
+
+  let t;
+  put(v, h('div', { class: 'admin' },
+    adminTop(h('span', { class: 'adm-stats' }, 'تمارين معدّلة: ', editedCount, ' · ', usageEl)),
+    h('div', { class: 'adm-grid' },
+      h('aside', { class: 'adm-side' },
+        h('label', { class: 'search' }, icon('search'),
+          h('input', { type: 'search', placeholder: 'ابحث بالاسم (عربي أو إنجليزي)', value: adm.q,
+            oninput: (ev) => { adm.q = ev.target.value; clearTimeout(t); t = setTimeout(drawList, 200); } })),
+        h('div', { class: 'filter-row' },
+          h('select', { class: 'select', onchange: (ev) => { adm.muscle = ev.target.value; drawList(); } },
+            h('option', { value: '' }, 'كل العضلات'),
+            Object.keys(MUSCLE_AR).map((m) => h('option', { value: m, selected: adm.muscle === m }, mAr(m)))),
+          h('button', { class: 'chip tgl' + (adm.onlyEdited ? ' on' : ''), onclick: (ev) => {
+            adm.onlyEdited = !adm.onlyEdited; ev.currentTarget.classList.toggle('on', adm.onlyEdited); drawList();
+          } }, 'المعدّلة فقط')),
+        listEl),
+      editor)));
+  drawList();
+  drawEditor();
+  refreshUsage();
+  // تحديث مباشر عند أي تعديل (من هذا الجهاز أو غيره)
+  const off = onContentChange(() => {
+    if (!location.hash.startsWith('#/admin')) { off(); return; }
+    const active = document.activeElement;
+    if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) { drawList(); return; }
+    drawList(); drawEditor();
+  });
+}
+
+function adminTop(extra = null) {
+  return h('header', { class: 'adm-top' },
+    h('div', {}, h('h1', {}, '⚙️ لوحة تحكم المحتوى'), extra),
+    h('button', { class: 'btn outline sm', onclick: () => go('#/settings') }, 'العودة للتطبيق'));
 }
 
 /* ============ الموجّه وشريط التبويبات ============ */
@@ -1088,9 +1254,11 @@ function route() {
   const [name, arg] = path.split('/').map(decodeURIComponent);
   const params = new URLSearchParams(qs || '');
   document.querySelectorAll('.sheet-backdrop').forEach((s) => s.remove());
+  document.body.classList.toggle('admin-mode', name === 'admin');
   renderTabs(TAB_OF[name] || 'home');
   window.scrollTo(0, 0);
   switch (name) {
+    case 'admin': return viewAdmin();
     case 'train': return viewTrain(arg || '');
     case 'plans': return viewPlans();
     case 'plan': return viewPlan(arg);
@@ -1115,6 +1283,18 @@ async function boot() {
   }
   window.addEventListener('hashchange', route);
   route();
+  // محتوى لوحة التحكم: أعد رسم الصفحة عند وصوله أو تغيّره، إلا أثناء الكتابة أو تمرين جارٍ
+  initContent();
+  let pending = null;
+  onContentChange(() => {
+    clearTimeout(pending);
+    pending = setTimeout(() => {
+      const hsh = location.hash;
+      const busy = hsh.startsWith('#/session') || hsh.startsWith('#/plan/') || hsh.startsWith('#/admin')
+        || document.querySelector('.sheet-backdrop') || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+      if (!busy) { const y = window.scrollY; route(); window.scrollTo(0, y); }
+    }, 300);
+  });
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
